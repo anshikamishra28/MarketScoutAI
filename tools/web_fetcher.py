@@ -1,16 +1,17 @@
 import requests
-from bs4 import BeautifulSoup
+
+from tools.content_extractor import extract_content
 
 
 def resolve_url(url: str) -> str:
     """
-    Resolve a redirect URL to the final webpage URL.
+    Resolve a URL to the final webpage URL.
     """
 
     response = requests.get(
         url,
         headers={
-            "User-Agent": "MarketScoutAI/0.1"
+            "User-Agent": "Mozilla/5.0"
         },
         timeout=10,
         allow_redirects=True,
@@ -33,20 +34,14 @@ def fetch_page(url: str) -> str:
             final_url,
             timeout=10,
             headers={
-                "User-Agent": "MarketScoutAI/0.1"
+                "User-Agent": "Mozilla/5.0"
             },
         )
 
         response.raise_for_status()
 
-        soup = BeautifulSoup(response.text, "html.parser")
-
-        for element in soup(["script", "style", "noscript"]):
-            element.decompose()
-
-        text = soup.get_text(separator=" ", strip=True)
-
-        return text
+        response.encoding = response.apparent_encoding
+        return extract_content(response.text)
 
     except requests.RequestException as error:
         raise RuntimeError(

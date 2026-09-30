@@ -68,6 +68,7 @@ def search_web(query: str, max_results: int = 5) -> list[dict]:
             {
                 "title": title.get_text(strip=True),
                 "url": link.get_text(strip=True),
+                "raw_link": str(link),
                 "publisher": publisher,
                 "publisher_url": publisher_url,
                 "snippet": snippet,

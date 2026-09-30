@@ -16,6 +16,9 @@ for query in research["plan"]["search_queries"]:
 print("\nSOURCES FOUND\n")
 
 for source in research["sources"]:
-    print(source["title"])
-    print(source["url"])
+    print("TITLE:", source["title"])
+    print("PUBLISHER:", source["publisher"])
+    print("CONTENT SCOPE:", source["content_scope"])
+    print("FETCH URL:", source["fetch_url"])
+    print("RAW LINK:", source["raw_link"])
     print()

@@ -30,7 +30,12 @@ def execute_research(research_question: str) -> dict:
                 break
 
             result["search_query"] = query
-            result["fetch_url"] = result.get("publisher_url") or result["url"]
+            if result.get("publisher_url"):
+                result["fetch_url"] = result["publisher_url"]
+                result["content_scope"] = "publisher_homepage"
+            else:
+                result["fetch_url"] = result["url"]
+                result["content_scope"] = "source_page"
 
             try:
                 result["content"] = fetch_page(result["fetch_url"])
