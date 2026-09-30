@@ -1,52 +1,24 @@
-import base64
-from urllib.parse import parse_qs, urlparse
-
 import requests
 from bs4 import BeautifulSoup
 
 
-def decode_bing_url(url: str) -> str:
-    """
-    Convert a Bing tracking URL into the actual destination URL.
-    """
-
-    parsed = urlparse(url)
-    query = parse_qs(parsed.query)
-
-    encoded_url = query.get("u", [None])[0]
-
-    if not encoded_url:
-        return url
-
-    try:
-        # Bing prefixes the Base64 value with "a1".
-        if encoded_url.startswith("a1"):
-            encoded_url = encoded_url[2:]
-
-        padding = "=" * (-len(encoded_url) % 4)
-
-        decoded_url = base64.urlsafe_b64decode(
-            encoded_url + padding
-        ).decode("utf-8")
-
-        return decoded_url
-
-    except (ValueError, UnicodeDecodeError):
-        return url
-
-
 def search_web(query: str, max_results: int = 5) -> list[dict]:
     """
-    Search the web using Bing's public HTML search page.
+    Search Google News RSS and return structured results.
     """
 
+    url = "https://news.google.com/rss/search"
+
     response = requests.get(
-        "https://www.bing.com/search",
+        url,
         params={
             "q": query,
+            "hl": "en-IN",
+            "gl": "IN",
+            "ceid": "IN:en",
         },
         headers={
-            "User-Agent": "Mozilla/5.0",
+            "User-Agent": "MarketScoutAI/0.1",
         },
         timeout=10,
     )
@@ -54,52 +26,58 @@ def search_web(query: str, max_results: int = 5) -> list[dict]:
     response.raise_for_status()
 
     soup = BeautifulSoup(
-        response.text,
-        "html.parser",
+        response.content,
+        "xml",
     )
 
     results = []
 
-    for result in soup.select("li.b_algo"):
-        link = result.select_one("h2 a")
+    for item in soup.find_all("item")[:max_results]:
+        title = item.find("title")
+        link = item.find("link")
+        description = item.find("description")
+        pub_date = item.find("pubDate")
+        source = item.find("source")
 
-        if not link:
+        if not title or not link:
             continue
 
-        title = link.get_text(
-            " ",
-            strip=True,
-        )
+        publisher = ""
+        publisher_url = ""
 
-        tracking_url = link.get("href", "")
+        if source:
+            publisher = source.get_text(strip=True)
+            publisher_url = source.get("url", "")
 
-        actual_url = decode_bing_url(
-            tracking_url
-        )
+        snippet = ""
 
-        snippet_element = result.select_one(
-            ".b_caption p"
-        )
+        if description:
+            description_html = description.get_text(
+                strip=True
+            )
 
-        snippet = (
-            snippet_element.get_text(
+            snippet = BeautifulSoup(
+                description_html,
+                "html.parser",
+            ).get_text(
                 " ",
                 strip=True,
             )
-            if snippet_element
-            else ""
-        )
 
         results.append(
             {
-                "title": title,
-                "url": actual_url,
+                "title": title.get_text(strip=True),
+                "url": link.get_text(strip=True),
+                "publisher": publisher,
+                "publisher_url": publisher_url,
                 "snippet": snippet,
+                "published_at": (
+                    pub_date.get_text(strip=True)
+                    if pub_date
+                    else ""
+                ),
                 "search_query": query,
             }
         )
-
-        if len(results) >= max_results:
-            break
 
     return results

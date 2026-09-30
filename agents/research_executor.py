@@ -30,9 +30,11 @@ def execute_research(research_question: str) -> dict:
                 break
 
             result["search_query"] = query
+            result["fetch_url"] = result.get("publisher_url") or result["url"]
 
             try:
-                result["content"] = fetch_page(result["url"])
+                result["content"] = fetch_page(result["fetch_url"])
+    
 
             except RuntimeError as error:
                 result["content"] = ""
