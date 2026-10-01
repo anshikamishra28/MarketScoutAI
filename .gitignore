@@ -28,11 +28,14 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+*.sqlite3
+*.db
 
 # Node
 node_modules/
 .next/
 out/
+*.tsbuildinfo
 
 # Build
 dist/

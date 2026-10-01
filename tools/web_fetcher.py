@@ -22,7 +22,7 @@ def resolve_url(url: str) -> str:
     return response.url
 
 
-def fetch_page(url: str) -> str:
+def fetch_document(url: str) -> dict:
     """
     Fetch a webpage and return its readable text.
     """
@@ -40,10 +40,22 @@ def fetch_page(url: str) -> str:
 
         response.raise_for_status()
 
-        response.encoding = response.apparent_encoding
-        return extract_content(response.text)
+        content_type = response.headers.get("content-type", "").lower()
+        if content_type and not any(kind in content_type for kind in ("text/html", "application/xhtml+xml")):
+            raise RuntimeError(f"Unsupported content type: {content_type}")
 
-    except requests.RequestException as error:
+        response.encoding = response.apparent_encoding
+        content = extract_content(response.text)
+        if not content:
+            raise RuntimeError("Fetched page contains no readable text")
+        return {"content": content, "final_url": response.url, "content_type": content_type}
+
+    except (requests.RequestException, RuntimeError) as error:
         raise RuntimeError(
             f"Failed to fetch webpage: {error}"
         ) from error
+
+
+def fetch_page(url: str) -> str:
+    """Backward compatible text-only fetch helper."""
+    return fetch_document(url)["content"]

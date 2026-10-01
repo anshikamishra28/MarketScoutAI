@@ -1,5 +1,6 @@
 import requests
 from bs4 import BeautifulSoup
+from urllib.parse import parse_qs, urlparse
 
 
 def search_direct(query: str, max_results: int = 5) -> list[dict]:
@@ -30,15 +31,16 @@ def search_direct(query: str, max_results: int = 5) -> list[dict]:
     for link in soup.select("a"):
         href = link.get("href", "")
 
-        if not href.startswith("/url?q="):
-            continue
+        parsed = urlparse(href)
+        actual_url = parse_qs(parsed.query).get("q", [""])[0] if parsed.path == "/url" else href
 
-        actual_url = href.split("/url?q=", 1)[1].split("&", 1)[0]
-
-        if actual_url.startswith("http"):
+        if actual_url.startswith("http") and "google." not in urlparse(actual_url).hostname and "news.google.com" not in actual_url:
             results.append({
-                "title": link.get_text(" ", strip=True),
+                "title": link.get_text(" ", strip=True) or actual_url,
                 "url": actual_url,
+                "publisher": urlparse(actual_url).hostname or "",
+                "snippet": "",
+                "published_at": "",
                 "search_query": query,
             })
 

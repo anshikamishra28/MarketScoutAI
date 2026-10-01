@@ -1,701 +1,81 @@
 # MarketScoutAI
 
-### Autonomous Web Research & Market Intelligence Agent
+MarketScoutAI is a modular market research prototype. It turns a research question into a bounded web research run, retains source metadata and verbatim evidence, tracks coverage gaps, and produces a cited report through a FastAPI API and Next.js dashboard.
 
-MarketScoutAI is an Agentic AI system designed to autonomously research the web, gather and verify evidence, analyze market dynamics, and generate evidence-backed market intelligence reports.
+## Problem and approach
 
-> **20-Day Development Sprint**
+Market research often combines scattered public sources and leaves readers unable to trace conclusions. MarketScoutAI uses a plan–search–fetch–evaluate–follow-up loop so coverage gaps can drive another search iteration. Gemini creates a structured plan when configured; source collection, budget enforcement, evidence checks, gap checks, conflict flags, persistence, and report assembly are explicit code. If Gemini is unavailable, a deterministic plan keeps the web research flow available.
 
----
-
-## Project Vision
-
-The goal of MarketScoutAI is to go beyond a simple "search + LLM + summary" application.
-
-A user provides a market research question, and the system should be able to:
-
-1. Understand the research objective.
-2. Create a research plan.
-3. Decide what information is required.
-4. Discover relevant web sources.
-5. Collect and extract information.
-6. Store evidence and source information.
-7. Detect missing or conflicting information.
-8. Perform additional research when required.
-9. Analyze competitors, trends, and market structure.
-10. Generate an evidence-backed market intelligence report.
-
-### Core Agentic Loop
+## Architecture
 
 ```text
-User Query
-    ↓
-Research Planner
-    ↓
-Source Discovery
-    ↓
-Web Data Collection
-    ↓
-Evidence Extraction
-    ↓
-Verification
-    ↓
-Enough Evidence?
-   ↙       ↘
- NO        YES
- ↓          ↓
-Research   Market
-Again      Analysis
-             ↓
-       Trend / Competitor
-          Analysis
-             ↓
-       Report Generation
-             ↓
-        Final Dashboard
+Next.js dashboard → FastAPI → research executor
+                               ├─ planner → Gemini (optional)
+                               ├─ Google News RSS search
+                               ├─ HTTP fetcher → HTML text extraction
+                               ├─ evidence/source evaluation and gap/conflict checks
+                               └─ SQLite: runs, sources, evidence, reports
 ```
 
-The research loop is the core of the project: the agent should be able to recognize when available evidence is insufficient and initiate additional research rather than immediately producing an answer.
+### Research loop and budgets
 
----
+The planner records a goal, sub-questions, information requirements, and initial queries. For up to 3 iterations, the executor searches, deduplicates URLs and query tasks, fetches pages, evaluates page scope and source type, and extracts verbatim sentences from usable article pages. Unanswered requirements create targeted follow-up queries. The run stops on sufficient keyword coverage, exhausted queries, or the 15-unique-source cap. Fetch/search failures are recorded or skipped and do not fabricate article evidence.
 
-# 20-Day Roadmap
+Coverage matching, source confidence, recency, geographic relevance, and numeric conflict detection are heuristics, not external credibility data or independent verification. Evidence usefulness combines source class, publication date, topical relevance, geographic fit, and an exact-text support check. Unknown publishers remain eligible but score below recognized source classes. Evidence is only extracted from fetched `source_page` content; snippets, Google News wrappers, empty pages, publisher homepages, incomplete statements, and obvious editorial copy are not treated as evidence. Candidate selection limits repeated claims from one source or publisher while favoring uncovered requirements.
 
-## Phase 1 — Foundation
+### Evidence and persistence
 
-### Day 1 — Project Setup
+Evidence records include IDs, run/source IDs, claim text, exact supporting text, source URL/title/publisher/date/type, content scope, relevance, confidence, and extraction timestamp. SQLite uses the standard library and creates `database/market_scout.sqlite3` by default. Set `MARKETSCOUT_DB` to use another location. The tables are `research_runs`, `sources`, `evidence`, and `reports`.
 
-* [ ] Establish project structure.
-* [ ] Set up Git/GitHub workflow.
-* [ ] Create Python virtual environment.
-* [ ] Configure environment variables.
-* [ ] Create `.gitignore`.
-* [ ] Set up initial README.
-* [ ] Decide initial technology stack.
+### API
 
-**Deliverable:** Project runs locally with a clean development structure.
+Run the API at `http://localhost:8000`; interactive OpenAPI docs are at `/docs`.
 
----
+| Method | Endpoint | Behavior |
+|---|---|---|
+| POST | `/research` | Queues a run and returns its ID (HTTP 202) |
+| GET | `/research/{id}` | Run, activity, evidence, and report metadata |
+| GET | `/research/{id}/status` | Current status and progress activity |
+| GET | `/research/{id}/sources` | Source metadata and extracted evidence |
+| GET | `/research/{id}/report` | Completed Markdown report |
+| GET | `/health` | Health check |
 
-### Day 2 — Python, API & LLM Foundation
+The current API runs work through FastAPI background tasks in the API process. For multi-worker production deployment, replace this with a durable task queue. Requirement coverage is labeled sufficient, weak, or unanswered by a keyword heuristic.
 
-Learn and implement only the Python required by the project:
+## Frontend
 
-* [ ] Python functions
-* [ ] Lists and dictionaries
-* [ ] JSON handling
-* [ ] Exception handling
-* [ ] Environment variables
-* [ ] API requests
-* [ ] Basic async concepts where required
+The Next.js app in `frontend/` provides a research prompt, run progress, coverage metrics, cited report, and evidence ledger. It expects the API on `http://localhost:8000` by default; override with `NEXT_PUBLIC_API_URL` in the frontend environment.
 
-Build:
+## Setup
 
-```text
-Python
-  ↓
-LLM API
-  ↓
-Structured JSON Response
+Python 3.10+ and Node.js 20+ are recommended. No paid services are required. Google News RSS and public webpages are used without credentials; Gemini is optional.
+
+1. Create and activate a Python virtual environment.
+2. Install Python dependencies: `pip install -r requirements.txt`.
+3. Copy `.env.example` to `.env`. `GEMINI_API_KEY` and `GEMINI_MODEL` enable Gemini planning; `SEARX_URL` optionally configures a SearXNG search endpoint. `MARKETSCOUT_DB` changes the SQLite file location. Keep `.env` private; it is ignored by Git.
+4. Start the API: `python run.py`.
+5. In another terminal: `cd frontend`, `npm install`, `npm run dev`.
+6. Open `http://localhost:3000`.
+
+Example research questions:
+
+- Analyze the Indian smartphone market under ₹30,000.
+- What are the main competitors and consumer trends in India's electric two-wheeler market?
+- Compare pricing and market positioning for affordable skincare brands in India.
+
+## Testing
+
+Run the deterministic unit/API suite with `python -m unittest discover -s tests -v`. The root `test_*.py` files are legacy interactive smoke scripts and some call external services; they are not part of this offline suite. A real research run requires network access and may benefit from a valid Gemini key. Run it from the dashboard or use:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/research -ContentType 'application/json' -Body '{"question":"Analyze the Indian smartphone market under ₹30,000"}'
 ```
 
-**Deliverable:** MarketScoutAI can accept a research question and receive a structured LLM response.
-
----
-
-### Day 3 — Tool System
-
-Create the first research tools:
-
-* [ ] `search_web()`
-* [ ] `fetch_page()`
-* [ ] `extract_content()`
-
-The LLM should be able to determine when a research tool is required.
-
-**Deliverable:** First tool-using agent.
-
----
-
-# Phase 2 — Web Intelligence
-
-## Day 4 — Web Research
-
-Build:
-
-```text
-Query
- ↓
-Search
- ↓
-URLs
- ↓
-Fetch Pages
- ↓
-Extract Content
-```
-
-Handle:
-
-* [ ] Failed pages
-* [ ] Timeouts
-* [ ] Duplicate URLs
-* [ ] Empty/irrelevant results
-
-**Deliverable:** Agent can autonomously collect web information.
-
----
-
-## Day 5 — Information Extraction
-
-Convert unstructured web information into structured evidence.
-
-Example:
-
-```json
-{
-  "entity": "Product X",
-  "price": "₹59,999",
-  "features": [],
-  "source": "https://example.com",
-  "published_date": "2026-09-01",
-  "confidence": 0.87
-}
-```
-
-Store:
-
-* [ ] Source
-* [ ] URL
-* [ ] Timestamp
-* [ ] Extracted claim
-* [ ] Supporting evidence
-* [ ] Confidence
-
-**Deliverable:** Structured evidence collection.
-
----
-
-## Day 6 — Research Planner
-
-Given a question such as:
-
-> "Analyze the Indian smartphone market under ₹30,000."
-
-The agent should create a research plan such as:
-
-```text
-1. Identify major brands
-2. Find products under ₹30,000
-3. Collect pricing
-4. Collect specifications
-5. Analyze recent launches
-6. Analyze customer sentiment
-7. Identify trends
-8. Compare competitors
-```
-
-**Deliverable:** Autonomous research planning.
-
----
-
-# Phase 3 — Agentic Core
-
-## Day 7 — Autonomous Research Loop
-
-Connect planning with tool execution:
-
-```text
-Plan
- ↓
-Execute
- ↓
-Observe
- ↓
-Evaluate
- ↓
-Choose Next Action
- ↓
-Execute Again
-```
-
-**Deliverable:** Multi-step autonomous research.
-
----
-
-## Day 8 — Missing Information Detection
-
-The agent should be able to recognize:
-
-> "I do not have enough information to answer this reliably."
-
-Example:
-
-```text
-Required:
-✓ Price
-✓ Processor
-✓ RAM
-✗ Battery information
-
-        ↓
-
-Create Follow-up Research Task
-        ↓
-Search Again
-```
-
-**Deliverable:** Research-gap detection.
-
----
-
-## Day 9 — Research Budget & Stopping Logic
-
-Prevent endless autonomous research.
-
-Implement:
-
-* [ ] Maximum number of sources
-* [ ] Maximum research iterations
-* [ ] Maximum research time
-* [ ] Stopping criteria
-* [ ] Research status tracking
-
-Example:
-
-```text
-Maximum Sources: 20
-Maximum Iterations: 5
-```
-
-The agent should determine when sufficient evidence has been collected.
-
-**Major milestone:** By the end of Day 9, the core Agentic AI loop should work.
-
----
-
-# Phase 4 — Trust & Market Intelligence
-
-## Day 10 — Source Verification
-
-Implement source-aware evidence handling.
-
-Potential source categories:
-
-* Official sources
-* Major publications
-* Industry sources
-* Review sites
-* Unknown/low-confidence sources
-
-Every important claim should retain its source.
-
-**Deliverable:** Evidence-backed research.
-
----
-
-## Day 11 — Conflict Detection
-
-Example:
-
-```text
-Source A → ₹29,999
-Source B → ₹31,999
-```
-
-The agent should detect the conflict and investigate:
-
-* Publication date
-* Product variant
-* Region
-* Source credibility
-* Context
-
-**Deliverable:** Fact/conflict verification.
-
----
-
-## Day 12 — Market Analysis
-
-Turn collected evidence into market intelligence.
-
-### Competitor Analysis
-
-* [ ] Companies
-* [ ] Products
-* [ ] Pricing
-* [ ] Features
-* [ ] Positioning
-
-### Market Segmentation
-
-* [ ] Budget
-* [ ] Mid-range
-* [ ] Premium
-* [ ] Other relevant segments
-
-### Trend Detection
-
-* [ ] Feature adoption
-* [ ] Pricing movement
-* [ ] Product launches
-* [ ] Emerging competitors
-* [ ] Market shifts
-
-**Deliverable:** Actual market intelligence rather than simple summarization.
-
----
-
-# Phase 5 — Product & Interface
-
-## Day 13 — Report Generation
-
-Generate a structured market intelligence report:
-
-```text
-1. Executive Summary
-2. Research Methodology
-3. Market Overview
-4. Major Players
-5. Competitive Analysis
-6. Product / Price Analysis
-7. Emerging Trends
-8. Market Gaps
-9. Evidence & Confidence
-10. Sources
-```
-
-**Deliverable:** Automated evidence-backed market report.
-
----
-
-## Day 14 — Backend
-
-Build the FastAPI backend and persistence layer.
-
-Planned endpoints:
-
-```text
-POST /research
-GET  /research/{id}
-GET  /research/{id}/status
-GET  /research/{id}/sources
-GET  /research/{id}/report
-```
-
-**Deliverable:** Production-style backend foundation.
-
----
-
-## Day 15 — Frontend Foundation
-
-Build the Next.js interface.
-
-Main flow:
-
-```text
-Home
- ↓
-Research Query
- ↓
-Research Progress
- ↓
-Results Dashboard
- ↓
-Full Report
-```
-
-**Deliverable:** Usable web application.
-
----
-
-# Phase 6 — Polish & Evaluation
-
-## Day 16 — Research Visualization
-
-Add useful visualizations:
-
-* [ ] Competitor comparison
-* [ ] Price distribution
-* [ ] Market segments
-* [ ] Trend indicators
-* [ ] Source confidence
-
-Keep the interface focused and readable.
-
-**Deliverable:** Professional intelligence dashboard.
-
----
-
-## Day 17 — Error Handling & Testing
-
-Test failure scenarios:
-
-* [ ] Website unavailable
-* [ ] Search API failure
-* [ ] No search results
-* [ ] Conflicting information
-* [ ] LLM failure
-* [ ] Malformed LLM response
-* [ ] Rate limits
-* [ ] Insufficient evidence
-
-**Deliverable:** Reliable application.
-
----
-
-## Day 18 — Agent Evaluation
-
-Create evaluation cases containing:
-
-* [ ] Research question
-* [ ] Expected information
-* [ ] Required evidence
-* [ ] Hallucination checks
-* [ ] Citation checks
-* [ ] Research efficiency
-
-Potential metrics:
-
-* Citation coverage
-* Factual consistency
-* Task completion
-* Research iterations
-* Unnecessary tool calls
-
-**Deliverable:** Evidence that the agent performs reliably.
-
----
-
-# Phase 7 — Deployment & Finalization
-
-## Day 19 — Deployment & Documentation
-
-Complete:
-
-* [ ] Frontend deployment
-* [ ] Backend deployment
-* [ ] Database deployment
-* [ ] README
-* [ ] Architecture diagram
-* [ ] Setup instructions
-* [ ] API documentation
-* [ ] Screenshots
-* [ ] Demo examples
-* [ ] Limitations
-* [ ] Future improvements
-
-**Deliverable:** Publicly accessible and documented project.
-
----
-
-## Day 20 — Final Polish & Presentation
-
-No major new features on Day 20.
-
-Final checks:
-
-* [ ] Complete end-to-end user journey
-* [ ] Test 2–3 market research queries
-* [ ] Verify citations
-* [ ] Verify research loop
-* [ ] Verify report generation
-* [ ] Clean GitHub repository
-* [ ] Final README update
-* [ ] Prepare project explanation
-* [ ] Prepare architecture explanation
-* [ ] Prepare agent decision-making explanation
-* [ ] Prepare technology-stack explanation
-* [ ] Prepare limitations
-* [ ] Prepare viva/interview questions
-
-**Final Deliverable:** Deployed, documented, tested, presentation-ready MarketScoutAI.
-
----
-
-# Milestone Map
-
-```text
-DAY 1
-Project Starts
-      ↓
-DAY 3
-LLM + Tools Working
-      ↓
-DAY 6
-Research Planner Working
-      ↓
-DAY 9
-AUTONOMOUS RESEARCH LOOP
-      ↓
-DAY 12
-Verification + Market Analysis
-      ↓
-DAY 15
-Backend + Basic UI
-      ↓
-DAY 18
-COMPLETE WORKING PRODUCT
-      ↓
-DAY 20
-DEPLOYED + DOCUMENTED + PRESENTATION READY
-```
-
----
-
-# Must-Have Features
-
-These features are part of the core 20-day scope:
-
-* [ ] LLM integration
-* [ ] Web research
-* [ ] Tool calling
-* [ ] Research planning
-* [ ] Autonomous research loop
-* [ ] Evidence extraction
-* [ ] Source citations
-* [ ] Missing-information detection
-* [ ] Basic verification
-* [ ] Market analysis
-* [ ] Report generation
-* [ ] Backend
-* [ ] Frontend
-* [ ] Database/persistence
-* [ ] Evaluation
-* [ ] README/documentation
-* [ ] Deployment
-
----
-
-# Optional Features
-
-These will only be added if the core system is stable ahead of schedule:
-
-* [ ] Vector database / advanced RAG
-* [ ] Advanced sentiment analysis
-* [ ] PDF export
-* [ ] Scheduled market monitoring
-* [ ] Email reports
-* [ ] User accounts
-* [ ] Multiple LLM providers
-* [ ] Advanced visualizations
-
-Optional features must never delay the core project.
-
----
-
-# Scope Protection
-
-To finish within 20 days, MarketScoutAI will **not** prioritize:
-
-* Building a custom search engine
-* Training an LLM from scratch
-* Scraping every website on the internet
-* Overcomplicated multi-agent architecture without a clear purpose
-* Unnecessary UI animations
-* Features that do not improve research quality or agent autonomy
-
-The priority is a **working, reliable, explainable Agentic AI system**.
-
----
-
-# Project Success Criteria
-
-MarketScoutAI will be considered complete when a user can:
-
-```text
-Enter a market question
-        ↓
-Receive an autonomous research plan
-        ↓
-Watch the agent research sources
-        ↓
-See evidence being collected
-        ↓
-See additional research when information is missing
-        ↓
-See conflicts being handled
-        ↓
-Receive market analysis
-        ↓
-Receive an evidence-backed final report
-```
-
-The system should be explainable at every major stage.
-
----
-
-# Development Log
-
-This section will be updated throughout the 20-day development sprint.
-
-| Day    | Focus                            | Status  |
-| ------ | -------------------------------- | ------- |
-| Day 1  | Project setup                    | Completed |
-| Day 2  | Python, API & LLM foundation     | Planned |
-| Day 3  | Tool system                      | Planned |
-| Day 4  | Web research                     | Planned |
-| Day 5  | Information extraction           | Planned |
-| Day 6  | Research planner                 | Planned |
-| Day 7  | Autonomous research loop         | Planned |
-| Day 8  | Missing-information detection    | Planned |
-| Day 9  | Research budget & stopping logic | Planned |
-| Day 10 | Source verification              | Planned |
-| Day 11 | Conflict detection               | Planned |
-| Day 12 | Market analysis                  | Planned |
-| Day 13 | Report generation                | Planned |
-| Day 14 | Backend                          | Planned |
-| Day 15 | Frontend foundation              | Planned |
-| Day 16 | Research visualization           | Planned |
-| Day 17 | Testing & error handling         | Planned |
-| Day 18 | Agent evaluation                 | Planned |
-| Day 19 | Deployment & documentation       | Planned |
-| Day 20 | Final polish & presentation      | Planned |
-
----
-
-# Development Philosophy
-
-MarketScoutAI will be developed incrementally.
-
-Each milestone should leave the project in a runnable state.
-
-The project will prioritize:
-
-1. **Agentic behavior over unnecessary features**
-2. **Evidence over unsupported claims**
-3. **Reliability over flashy demos**
-4. **Explainability over black-box behavior**
-5. **Working software over excessive architecture**
-6. **Learning concepts while implementing them**
-
----
-
-# Future Scope
-
-Possible future directions include:
-
-* Continuous market monitoring
-* Scheduled intelligence reports
-* Competitive alerts
-* Personalized research objectives
-* More advanced source credibility scoring
-* Long-term research memory
-* Multi-market comparison
-* Additional data sources
-* Advanced agent evaluation
-* Human-in-the-loop research approval
-
----
-
-# Status
-
-**Current Phase:** Development
-**Timeline:** 20 days
-**Current Milestone:** Day 1 — Project completed
-
----
-
-## Repository
-
-GitHub: https://github.com/anshikamishra28/MarketScoutAI
+## Limitations and next steps
+
+- Search currently uses Google News RSS and can miss direct evergreen sources.
+- Direct Bing/Google/SearXNG search is attempted first, but providers may block automated requests; wrapper-only results are retained as search leads and correctly produce no article evidence.
+- Fetching is limited to public HTML pages; paywalls, JavaScript-only pages, and access controls may prevent extraction.
+- Source categories and confidence, information coverage, and conflicts use basic heuristics. The report presents evidence rather than claiming exhaustive market sizing.
+- Background work is process-local; there is no authentication, user management, or deployment configuration.
+- Useful next steps are broader free search providers, stronger requirement-to-evidence evaluation, reviewed conflict resolution, and a durable task queue.
