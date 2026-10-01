@@ -164,6 +164,8 @@ class GenericComparisonServiceTests(unittest.TestCase):
         self.assertEqual(result["source_checks"][0]["status"], "partial")
         self.assertEqual(len(result["observations"]), 1)
         self.assertEqual(result["observations"][0]["entity_key"], "netflix")
+        self.assertIsInstance(result["analysis"], dict)
+        self.assertEqual(result["analysis"]["attributes"][0]["status"], "unresolved")
 
     def test_adapters_are_considered_when_request_has_no_source_preferences(self):
         self.request.source_preferences = []

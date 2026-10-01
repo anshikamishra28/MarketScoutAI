@@ -557,6 +557,8 @@ def update_comparison_run(comparison_id, **fields):
             if not isinstance(values[key], list) or not all(isinstance(item, str) for item in values[key]):
                 raise ValueError(f"{key} must be a list of strings")
             values[key] = _generic_json(values[key])
+    if "analysis" in values and not isinstance(values["analysis"], str):
+        values["analysis"] = _generic_json({"__comparison_analysis_v1__": values["analysis"]}) if values["analysis"] is not None else None
     if not values:
         return
     with connect() as db:
@@ -671,9 +673,18 @@ def get_comparison_result(comparison_id):
     errors = json.loads(run["errors"] or "[]")
     if run["error"] and run["error"] not in errors:
         errors.append(run["error"])
+    analysis = run["analysis"]
+    if isinstance(analysis, str):
+        try:
+            decoded_analysis = json.loads(analysis)
+        except (TypeError, json.JSONDecodeError):
+            pass
+        else:
+            if isinstance(decoded_analysis, dict) and "__comparison_analysis_v1__" in decoded_analysis:
+                analysis = decoded_analysis["__comparison_analysis_v1__"]
     result = GenericComparisonResult(comparison_id=run["comparison_id"], status=run["status"],
         request=request, entities=entity_models, attributes=attribute_models, source_checks=source_models,
-        observations=observation_models, analysis=run["analysis"],
+        observations=observation_models, analysis=analysis,
         unresolved=json.loads(run["unresolved"] or "[]"), errors=errors,
         created_at=run["created_at"], updated_at=run["updated_at"])
     return result.to_dict()

@@ -156,6 +156,15 @@ class GenericComparisonStoreTests(unittest.TestCase):
         self.assertEqual(result["unresolved"], ["channel data"])
         self.assertEqual(result["errors"], ["source timeout", "partial result"])
 
+    def test_structured_analysis_round_trips_without_changing_legacy_text(self):
+        analysis = {"schema_version": 1, "attributes": [{"key": "monthly_price", "status": "unresolved"}]}
+        store.update_comparison_run(self.comparison_id, analysis=analysis)
+        self.assertEqual(store.get_comparison_result(self.comparison_id)["analysis"], analysis)
+        store.update_comparison_run(self.comparison_id, analysis='{"legacy":"text payload"}')
+        self.assertEqual(store.get_comparison_result(self.comparison_id)["analysis"], '{"legacy":"text payload"}')
+        store.update_comparison_run(self.comparison_id, analysis="Legacy summary")
+        self.assertEqual(store.get_comparison_result(self.comparison_id)["analysis"], "Legacy summary")
+
     def test_same_entity_attribute_can_have_observations_from_distinct_sources_and_times(self):
         for key, name, price, time in (
             ("provider-a", "Provider A", 649, "2026-10-01T10:00:00Z"),

@@ -3,6 +3,7 @@ from collections.abc import Mapping
 import uuid
 
 from database import store
+from services.comparison_analysis import analyze_comparison
 from models.comparison import (
     ComparisonRequest,
     ComparisonStatus,
@@ -162,4 +163,9 @@ def execute_comparison(request, adapters=(), comparison_id=None) -> dict:
     result = store.get_comparison_result(comparison_id)
     if result is None:
         raise RuntimeError("comparison result could not be read after execution")
+    analysis = analyze_comparison(result)
+    store.update_comparison_run(comparison_id, analysis=analysis)
+    result = store.get_comparison_result(comparison_id)
+    if result is None:
+        raise RuntimeError("comparison result could not be read after analysis")
     return result

@@ -319,7 +319,7 @@ class ComparisonResult:
     attributes: list[AttributeDefinition] = field(default_factory=list)
     source_checks: list[SourceCheck] = field(default_factory=list)
     observations: list[Observation] = field(default_factory=list)
-    analysis: str | None = None
+    analysis: Any = None
     unresolved: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     created_at: str | None = None
@@ -348,7 +348,10 @@ class ComparisonResult:
         for values, expected_type, name in groups:
             if not all(isinstance(item, expected_type) for item in values):
                 raise ValueError(f"{name} contain invalid model values")
-        self.analysis = _optional_text(self.analysis, "analysis")
+        if isinstance(self.analysis, str):
+            self.analysis = self.analysis.strip() or None
+        elif self.analysis is not None:
+            _validate_json_value(self.analysis, "analysis")
         for name in ("unresolved", "errors"):
             values = getattr(self, name)
             if not isinstance(values, list) or not all(isinstance(item, str) and item.strip() for item in values):
