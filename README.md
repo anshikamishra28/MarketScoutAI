@@ -245,11 +245,7 @@ Copy-Item .env.example .env
 
 Edit `.env` to configure `GEMINI_API_KEY` if Gemini planning is desired. `GEMINI_MODEL` defaults to `gemini-2.5-flash`. If no key is configured or the planner call fails, the research planner falls back to its deterministic plan. `SEARX_URL` is optional and configures a SearXNG search endpoint. `MARKETSCOUT_DB` is optional and changes the SQLite database path.
 
-`tools/web_search.py` imports the `googlenewsdecoder` package, but that package is not currently listed in `requirements.txt`. A fresh environment may need it installed separately for the Google News RSS fallback:
-
-```powershell
-python -m pip install googlenewsdecoder
-```
+`googlenewsdecoder` is declared in `requirements.txt` because `tools/web_search.py` imports it for Google News RSS URL decoding.
 
 Keep `.env` private; it is ignored by Git. `.env.example` contains placeholders only. No real credentials belong in source control or this README.
 
