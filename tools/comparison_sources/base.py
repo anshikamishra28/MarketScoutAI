@@ -19,8 +19,10 @@ class ComparisonSourceOutcome:
             isinstance(item, Observation) for item in self.observations
         ):
             raise ValueError("observations must be a list of Observation values")
-        if self.check.status is not SourceStatus.CHECKED and self.observations:
-            raise ValueError("only a checked source result may contain observations")
+        if self.check.status not in {SourceStatus.CHECKED, SourceStatus.PARTIAL} and self.observations:
+            raise ValueError("only checked or partial source results may contain observations")
+        if self.check.status is SourceStatus.PARTIAL and not self.observations:
+            raise ValueError("a partial source result must contain at least one valid observation")
         if any(item.source_key != self.check.source.key for item in self.observations):
             raise ValueError("observation source_key must match the source check")
 

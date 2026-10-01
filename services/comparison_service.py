@@ -129,7 +129,7 @@ def execute_comparison(request, adapters=(), comparison_id=None) -> dict:
                 if validation_error:
                     raise ValueError(validation_error)
                 store.upsert_comparison_source_check(comparison_id, outcome.check)
-                if outcome.check.status is SourceStatus.CHECKED:
+                if outcome.check.status in {SourceStatus.CHECKED, SourceStatus.PARTIAL}:
                     for observation in outcome.observations:
                         store.add_comparison_observation(comparison_id, observation)
                         observations_saved.append(observation)

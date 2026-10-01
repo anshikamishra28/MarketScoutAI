@@ -131,12 +131,39 @@ class GenericComparisonServiceTests(unittest.TestCase):
         self.assertIn("unrequested entity", result["source_checks"][0]["error"])
         self.assertEqual(result["observations"], [])
 
-    def test_outcome_contract_rejects_observations_for_non_checked_source(self):
-        with self.assertRaisesRegex(ValueError, "only a checked source"):
-            ComparisonSourceOutcome(
-                SourceCheck(SourceReference("src", "Source"), "blocked"),
-                [Observation("netflix", "monthly_price", "src", "649", 649)],
-            )
+    def test_outcome_contract_allows_observations_for_partial_source(self):
+        outcome = ComparisonSourceOutcome(
+            SourceCheck(SourceReference("provider-a", "Provider A"), "partial",
+                        diagnostics={"entities": [{"entity_key": "netflix", "status": "checked"},
+                                                  {"entity_key": "prime", "status": "unavailable"}]}),
+            [Observation("netflix", "monthly_price", "provider-a", "₹649/month", 649)],
+        )
+        self.assertEqual(outcome.check.status.value, "partial")
+        self.assertEqual(len(outcome.observations), 1)
+
+    def test_outcome_contract_rejects_observations_for_unusable_source_states(self):
+        for status in ("pending", "unavailable", "blocked", "failed", "unsupported"):
+            with self.subTest(status=status):
+                with self.assertRaisesRegex(ValueError, "only checked or partial"):
+                    ComparisonSourceOutcome(
+                        SourceCheck(SourceReference("src", "Source"), status),
+                        [Observation("netflix", "monthly_price", "src", "649", 649)],
+                    )
+        with self.assertRaisesRegex(ValueError, "partial source result must contain"):
+            ComparisonSourceOutcome(SourceCheck(SourceReference("src", "Source"), "partial"))
+
+    def test_generic_service_persists_partial_observations_and_partial_status(self):
+        partial = ComparisonSourceOutcome(
+            SourceCheck(SourceReference("provider-a", "Provider A"), "partial",
+                        diagnostics={"entities": [{"entity_key": "netflix", "status": "checked"},
+                                                  {"entity_key": "prime", "status": "blocked"}]}),
+            [Observation("netflix", "monthly_price", "provider-a", "₹649/month", 649,
+                         value_type="scalar", unit="month", currency="INR")],
+        )
+        result = execute_comparison(self.request, [FakeAdapter("provider-a", partial)], comparison_id="partial-status")
+        self.assertEqual(result["source_checks"][0]["status"], "partial")
+        self.assertEqual(len(result["observations"]), 1)
+        self.assertEqual(result["observations"][0]["entity_key"], "netflix")
 
     def test_adapters_are_considered_when_request_has_no_source_preferences(self):
         self.request.source_preferences = []

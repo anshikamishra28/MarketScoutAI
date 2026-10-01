@@ -40,6 +40,48 @@ def connect():
         db.close()
 
 
+def _migrate_generic_source_check_status():
+    """Add the partial source state to databases created before it existed."""
+    db = sqlite3.connect(DB_PATH, timeout=20, isolation_level=None)
+    try:
+        row = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='comparison_source_checks'").fetchone()
+        if not row or "partial" in (row[0] or "").casefold():
+            return
+        db.execute("PRAGMA foreign_keys = OFF")
+        db.execute("BEGIN IMMEDIATE")
+        db.execute("""CREATE TABLE comparison_source_checks_new (
+            source_check_id TEXT PRIMARY KEY,
+            comparison_id TEXT NOT NULL REFERENCES comparison_runs(comparison_id) ON DELETE CASCADE,
+            source_key TEXT NOT NULL,
+            source_name TEXT NOT NULL,
+            source_type TEXT,
+            source_url TEXT,
+            status TEXT NOT NULL CHECK(status IN ('pending','checked','partial','unavailable','blocked','failed','unsupported')),
+            checked_at TEXT,
+            diagnostics TEXT,
+            error TEXT,
+            UNIQUE(comparison_id, source_key),
+            UNIQUE(comparison_id, source_check_id)
+        )""")
+        db.execute("""INSERT INTO comparison_source_checks_new
+            (source_check_id,comparison_id,source_key,source_name,source_type,source_url,status,checked_at,diagnostics,error)
+            SELECT source_check_id,comparison_id,source_key,source_name,source_type,source_url,status,checked_at,diagnostics,error
+            FROM comparison_source_checks""")
+        db.execute("DROP TABLE comparison_source_checks")
+        db.execute("ALTER TABLE comparison_source_checks_new RENAME TO comparison_source_checks")
+        violations = db.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise sqlite3.IntegrityError("generic source-check migration found foreign-key violations")
+        db.commit()
+        db.execute("PRAGMA foreign_keys = ON")
+    except Exception:
+        if db.in_transaction:
+            db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 def init_db():
     with connect() as db:
         db.executescript("""
@@ -127,7 +169,7 @@ def init_db():
             source_name TEXT NOT NULL,
             source_type TEXT,
             source_url TEXT,
-            status TEXT NOT NULL CHECK(status IN ('pending','checked','unavailable','blocked','failed','unsupported')),
+            status TEXT NOT NULL CHECK(status IN ('pending','checked','partial','unavailable','blocked','failed','unsupported')),
             checked_at TEXT,
             diagnostics TEXT,
             error TEXT,
@@ -184,6 +226,7 @@ def init_db():
         retailer_check_columns = {row[1] for row in db.execute("PRAGMA table_info(price_retailer_checks)")}
         if "diagnostics" not in retailer_check_columns:
             db.execute("ALTER TABLE price_retailer_checks ADD COLUMN diagnostics TEXT NOT NULL DEFAULT '{}'" )
+    _migrate_generic_source_check_status()
 
 
 def create_run(run_id, question):

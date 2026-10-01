@@ -24,6 +24,7 @@ class ComparisonStatus(str, Enum):
 class SourceStatus(str, Enum):
     PENDING = "pending"
     CHECKED = "checked"
+    PARTIAL = "partial"
     UNAVAILABLE = "unavailable"
     BLOCKED = "blocked"
     FAILED = "failed"
@@ -212,7 +213,7 @@ class SourceCheck:
         try:
             self.status = SourceStatus(self.status)
         except (TypeError, ValueError) as exc:
-            raise ValueError("status must be pending, checked, unavailable, blocked, failed, or unsupported") from exc
+            raise ValueError("status must be pending, checked, partial, unavailable, blocked, failed, or unsupported") from exc
         self.checked_at = _timestamp(self.checked_at, "checked_at")
         if self.diagnostics is not None:
             if not isinstance(self.diagnostics, dict):

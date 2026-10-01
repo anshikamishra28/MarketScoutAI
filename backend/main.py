@@ -17,7 +17,7 @@ from models.price_comparison import (
 from services.price_comparison import start_price_comparison, execute_price_comparison
 from models.comparison import ComparisonRequest
 from services.comparison_service import execute_comparison, start_generic_comparison
-from tools.comparison_sources import ComparisonSourceAdapter
+from tools.comparison_sources import ComparisonSourceAdapter, RelianceDigitalComparisonAdapter
 
 store.init_db()
 app = FastAPI(title="MarketScoutAI API", description="Evidence-backed autonomous market research", version="1.0.0")
@@ -37,8 +37,8 @@ def _run_price_comparison(comparison_id: str):
 
 
 def _generic_comparison_adapters() -> tuple[ComparisonSourceAdapter, ...]:
-    """Registry boundary for generic sources; no adapters are enabled yet."""
-    return ()
+    """Registry of source adapters enabled for generic comparisons."""
+    return (RelianceDigitalComparisonAdapter(),)
 
 
 def _run_generic_comparison(comparison_id: str, request: ComparisonRequest):

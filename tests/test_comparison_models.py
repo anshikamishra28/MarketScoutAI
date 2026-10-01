@@ -88,7 +88,7 @@ class GenericComparisonModelTests(unittest.TestCase):
 
     def test_source_check_statuses_are_explicit_and_generic(self):
         source = SourceReference("public_site", "Public site", "website", "https://example.com")
-        for status in ("pending", "checked", "unavailable", "blocked", "failed", "unsupported"):
+        for status in ("pending", "checked", "partial", "unavailable", "blocked", "failed", "unsupported"):
             with self.subTest(status=status):
                 check = SourceCheck(source, status)
                 self.assertEqual(check.status.value, status)
