@@ -28,6 +28,11 @@ export interface SourceReference {
   url?: string | null;
 }
 
+export interface IdentifierDraft {
+  key: string;
+  value: string;
+}
+
 export interface ComparisonRequest {
   user_request: string;
   entities?: EntityReference[];

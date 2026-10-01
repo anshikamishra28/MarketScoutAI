@@ -43,7 +43,12 @@ export function ComparisonResult({ result, comparisonId, status, loading = false
       {result && <>
         <div className="generic-result-section">
           <h3>Entities</h3>
-          {result.entities.length ? <ul className="generic-chip-list">{result.entities.map((entity) => <li key={entity.key}>{entity.display_name}</li>)}</ul> : <p className="generic-muted">No entities were resolved or supplied.</p>}
+          {result.entities.length ? <ul className="generic-chip-list">{result.entities.map((entity) => <li className="generic-entity-result" key={entity.key}>
+            <strong>{entity.display_name}</strong>
+            {Object.entries(entity.identifiers ?? {}).length > 0 && <dl className="generic-identifier-summary">
+              {Object.entries(entity.identifiers ?? {}).map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{displayValue(value)}</dd></div>)}
+            </dl>}
+          </li>)}</ul> : <p className="generic-muted">No entities were resolved or supplied.</p>}
         </div>
 
         <div className="generic-result-section">
