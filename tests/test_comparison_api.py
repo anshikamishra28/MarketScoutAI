@@ -4,6 +4,32 @@ import unittest
 from unittest.mock import patch
 
 from database import store
+from models.comparison import Observation, SourceCheck, SourceReference
+from tools.comparison_sources.base import ComparisonSourceOutcome
+
+
+class StaticComparisonAdapter:
+    def __init__(self, observations):
+        self.source = SourceReference("fixture", "Fixture source", "test")
+        self.observations = observations
+
+    def supports(self, request, source):
+        return source.key == self.source.key
+
+    def check(self, request, source):
+        return ComparisonSourceOutcome(
+            SourceCheck(source, "checked"),
+            [Observation(
+                entity_key=entity_key,
+                attribute_key="metric",
+                source_key=source.key,
+                raw_value=raw_value,
+                normalized_value=value,
+                value_type="scalar",
+                unit="unit",
+                source_url=f"https://example.com/{entity_key}",
+            ) for entity_key, raw_value, value in self.observations],
+        )
 
 
 class GenericComparisonApiTests(unittest.TestCase):
@@ -82,6 +108,73 @@ class GenericComparisonApiTests(unittest.TestCase):
         self.assertEqual(result["status"], "queued")
         self.assertEqual(result["source_checks"], [])
         self.assertEqual(result["observations"], [])
+
+    def _analysis_payload(self, comparison_rule=None):
+        return {
+            "user_request": "Compare two generic entities by a numeric metric.",
+            "entities": [
+                {"key": "entity_a", "display_name": "Entity A"},
+                {"key": "entity_b", "display_name": "Entity B"},
+            ],
+            "attributes": [{
+                "key": "metric", "label": "Metric", "value_type": "scalar",
+                "unit": "unit", "comparison_rule": comparison_rule,
+            }],
+            "source_preferences": [{"key": "fixture", "name": "Fixture source", "source_type": "test"}],
+        }
+
+    def _run_with_fixture_source(self, payload, observations):
+        adapter = StaticComparisonAdapter(observations)
+        with patch("backend.main._generic_comparison_adapters", return_value=(adapter,)):
+            started = self.client.post("/comparisons", json=payload)
+        self.assertEqual(started.status_code, 202, started.text)
+        comparison_id = started.json()["comparison_id"]
+        response = self.client.get(f"/comparisons/{comparison_id}")
+        self.assertEqual(response.status_code, 200, response.text)
+        return comparison_id, response.json()
+
+    def test_completed_api_result_contains_persisted_structured_analysis_and_explicit_ranking(self):
+        comparison_id, result = self._run_with_fixture_source(
+            self._analysis_payload("lower_is_better"),
+            [("entity_a", "12 units", 12), ("entity_b", "7 units", 7)],
+        )
+        for field in (
+            "comparison_id", "status", "entities", "attributes", "source_checks",
+            "observations", "analysis", "unresolved", "errors",
+        ):
+            self.assertIn(field, result)
+        self.assertEqual(result["status"], "completed")
+        self.assertIsInstance(result["analysis"], dict)
+        self.assertEqual(len(result["observations"]), 2)
+        attribute = result["analysis"]["attributes"][0]
+        self.assertEqual(attribute["attribute_key"], "metric")
+        self.assertEqual(attribute["status"], "complete")
+        self.assertEqual([row["comparable_value"] for row in attribute["entities"]], [12, 7])
+        self.assertEqual([row["entity_key"] for row in attribute["ranking"]], ["entity_b", "entity_a"])
+        self.assertEqual(attribute["winner_entity_key"], "entity_b")
+        saved = store.get_comparison_result(comparison_id)
+        self.assertEqual(saved["analysis"], result["analysis"])
+
+    def test_missing_entity_data_remains_unresolved_without_ranking_or_winner(self):
+        _, result = self._run_with_fixture_source(
+            self._analysis_payload("higher_is_better"),
+            [("entity_a", "12 units", 12)],
+        )
+        attribute = result["analysis"]["attributes"][0]
+        self.assertEqual(attribute["status"], "unresolved")
+        self.assertEqual(attribute["entities"][1]["status"], "unresolved")
+        self.assertEqual(attribute["ranking"], [])
+        self.assertIsNone(attribute["winner_entity_key"])
+
+    def test_without_comparison_rule_api_reports_values_without_ranking(self):
+        _, result = self._run_with_fixture_source(
+            self._analysis_payload(),
+            [("entity_a", "12 units", 12), ("entity_b", "7 units", 7)],
+        )
+        attribute = result["analysis"]["attributes"][0]
+        self.assertEqual([row["comparable_value"] for row in attribute["entities"]], [12, 7])
+        self.assertEqual(attribute["ranking"], [])
+        self.assertIsNone(attribute["winner_entity_key"])
 
     def test_missing_comparison_returns_404_from_both_get_routes(self):
         self.assertEqual(self.client.get("/comparisons/missing/status").status_code, 404)
