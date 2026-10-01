@@ -95,11 +95,13 @@ Research data is stored in SQLite tables for runs, sources, evidence, and report
 
 ## Generic comparison workflow
 
-The current generic comparison API accepts a `ComparisonRequest`: the original request text, explicitly supplied entities, dynamic attributes, optional context, and source preferences. There is no automatic entity extraction or LLM-based comparison understanding step in the current workflow; the UI lets the user enter entities, identifiers, attributes, and sources directly.
+The generic comparison workflow supports both a natural-language interpretation path and a structured `ComparisonRequest` path. Natural-language input is interpreted on the backend into a draft intent; proposed fields remain unverified until explicitly confirmed. The structured form remains available for callers that already have resolved entities, dynamic attributes, context, and source preferences.
 
 ```text
-Comparison Request
-  → Validate supplied entities, attributes, and source preferences
+Natural-language request
+  → Interpret into a draft intent
+  → Clarify and explicitly confirm proposed fields
+  → Execute only when ready
   → Run each selected registered source adapter
   → Persist source checks and accepted observations
   → Analyze the persisted observations deterministically

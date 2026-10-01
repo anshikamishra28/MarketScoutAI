@@ -131,3 +131,41 @@ export interface ComparisonStatusResponse {
   error: string | null;
   errors: string[];
 }
+
+export interface ComparisonWorkflowIssue {
+  code: string;
+  target: string;
+  message: string;
+  candidates: JsonValue[];
+  clarification_question: string | null;
+}
+
+export interface ComparisonWorkflowIntent {
+  request: ComparisonRequest;
+  state: "ready" | "needs_clarification";
+  unresolved: ComparisonWorkflowIssue[];
+  provenance: Record<string, "user_provided" | "proposed" | "user_confirmed">;
+}
+
+export interface ComparisonWorkflowResponse {
+  workflow_id: string;
+  intent: ComparisonWorkflowIntent;
+  clarification: {
+    state: "ready" | "needs_clarification";
+    ready_for_execution: boolean;
+    unresolved: ComparisonWorkflowIssue[];
+    confirmations_required: Array<{ path: string; proposed_value: JsonValue; provenance: "proposed" }>;
+  };
+  comparison_id: string | null;
+  comparison_status: ComparisonStatus | null;
+}
+
+export interface ComparisonWorkflowRequest {
+  user_request: string;
+  context?: Record<string, JsonValue> | null;
+  source_preferences: SourceReference[];
+}
+
+export interface ComparisonWorkflowConfirmation {
+  values: Record<string, JsonValue>;
+}

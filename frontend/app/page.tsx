@@ -11,6 +11,7 @@ import { SourcesList } from "../components/SourcesList";
 import { PriceComparisonPanel } from "../components/PriceComparisonPanel";
 import { ComparisonPrompt } from "../components/ComparisonPrompt";
 import { ComparisonResult } from "../components/ComparisonResult";
+import { ComparisonWorkflow } from "../components/ComparisonWorkflow";
 import { getComparison, getComparisonStatus, getResearchDetails, getResearchReport, getResearchSources, getResearchStatus, startComparison, startResearch } from "../lib/api";
 import type { ResearchRun, ResearchSource } from "../types/research";
 import type { ComparisonRequest, ComparisonResult as ComparisonResultData } from "../types/comparison";
@@ -32,6 +33,15 @@ export default function Home() {
   const [comparisonResult, setComparisonResult] = useState<ComparisonResultData | null>(null);
   const [comparisonError, setComparisonError] = useState("");
   const [comparisonBusy, setComparisonBusy] = useState(false);
+  const [comparisonInputMode, setComparisonInputMode] = useState<"natural" | "structured">("natural");
+
+  function onWorkflowExecutionStarted(id: string, status: string) {
+    setComparisonId(id);
+    setComparisonStatus(status);
+    setComparisonError("");
+    setComparisonResult(null);
+    setComparisonBusy(true);
+  }
 
   async function submitComparison(request: ComparisonRequest) {
     setComparisonBusy(true);
@@ -220,7 +230,13 @@ export default function Home() {
       </div>
 
       <div hidden={activeMode !== "compare"}>
-        <ComparisonPrompt busy={comparisonBusy} error={comparisonError} onSubmit={submitComparison} />
+        <div className="comparison-mode-switch" role="group" aria-label="Comparison input mode">
+          <button type="button" aria-pressed={comparisonInputMode === "natural"} onClick={() => setComparisonInputMode("natural")}>Describe a comparison</button>
+          <button type="button" aria-pressed={comparisonInputMode === "structured"} onClick={() => setComparisonInputMode("structured")}>Structured input</button>
+        </div>
+        {comparisonInputMode === "natural"
+          ? <ComparisonWorkflow busy={comparisonBusy} error={comparisonError} onExecutionStarted={onWorkflowExecutionStarted} />
+          : <ComparisonPrompt busy={comparisonBusy} error={comparisonError} onSubmit={submitComparison} />}
         <ComparisonResult result={comparisonResult} comparisonId={comparisonId} status={comparisonStatus} loading={comparisonBusy} error={comparisonError} />
         <section className="retail-price-section" aria-labelledby="retail-price-title">
           <div className="retail-price-heading">

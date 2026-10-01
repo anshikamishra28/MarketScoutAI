@@ -1,6 +1,8 @@
 """FastAPI entry point for persistent market research runs."""
 import json
+import threading
 import uuid
+from typing import Any
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -17,6 +19,16 @@ from models.price_comparison import (
 from services.price_comparison import start_price_comparison, execute_price_comparison
 from models.comparison import ComparisonRequest
 from services.comparison_service import execute_comparison, start_generic_comparison
+from models.comparison import SourceReference
+from models.comparison_intent import ComparisonIntent
+from services.comparison_interpreter import ComparisonInterpretationProvider
+from services.comparison_workflow import (
+    ConfirmationPayload,
+    confirm_comparison_intent,
+    execute_confirmed_comparison,
+    get_clarification_details,
+    interpret_comparison_workflow,
+)
 from tools.comparison_sources import ComparisonSourceAdapter, RelianceDigitalComparisonAdapter
 
 store.init_db()
@@ -26,6 +38,16 @@ app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:3000", "http
 
 class ResearchRequest(BaseModel):
     question: str = Field(min_length=8, max_length=2000)
+
+
+class ComparisonWorkflowRequest(BaseModel):
+    user_request: str = Field(min_length=1, max_length=4000)
+    context: dict[str, Any] | None = None
+    source_preferences: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ComparisonWorkflowConfirmation(BaseModel):
+    values: dict[str, Any] = Field(default_factory=dict)
 
 
 def _run_research(run_id: str, question: str):
@@ -39,6 +61,48 @@ def _run_price_comparison(comparison_id: str):
 def _generic_comparison_adapters() -> tuple[ComparisonSourceAdapter, ...]:
     """Registry of source adapters enabled for generic comparisons."""
     return (RelianceDigitalComparisonAdapter(),)
+
+
+# Workflow drafts are deliberately separate from persisted comparison runs.
+# They are short-lived clarification sessions; executable runs continue to use
+# the existing generic comparison store and lifecycle.
+_comparison_workflows: dict[str, dict[str, Any]] = {}
+_comparison_workflows_lock = threading.Lock()
+
+
+def _comparison_interpretation_provider() -> ComparisonInterpretationProvider | None:
+    """Default to the interpreter's configured provider; tests may inject a fake."""
+    return None
+
+
+def _workflow_payload(workflow_id: str, session: dict[str, Any]) -> dict[str, Any]:
+    intent: ComparisonIntent = session["intent"]
+    return {
+        "workflow_id": workflow_id,
+        "intent": intent.to_dict(),
+        "clarification": get_clarification_details(intent),
+        "comparison_id": session.get("comparison_id"),
+        "comparison_status": session.get("comparison_status"),
+    }
+
+
+def _queue_confirmed_workflow(session: dict[str, Any], background_tasks: BackgroundTasks) -> None:
+    intent: ComparisonIntent = session["intent"]
+    record = start_generic_comparison(intent.request)
+    comparison_id = record["comparison_id"]
+    session["comparison_id"] = comparison_id
+    session["comparison_status"] = "queued"
+    background_tasks.add_task(_run_confirmed_workflow, intent, comparison_id)
+
+
+def _run_confirmed_workflow(intent: ComparisonIntent, comparison_id: str):
+    try:
+        return execute_confirmed_comparison(
+            intent, adapters=_generic_comparison_adapters(), comparison_id=comparison_id,
+        )
+    except Exception as exc:
+        store.update_comparison_run(comparison_id, status="failed", error=str(exc) or exc.__class__.__name__)
+        raise
 
 
 def _run_generic_comparison(comparison_id: str, request: ComparisonRequest):
@@ -89,6 +153,81 @@ def root():
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}
+
+
+@app.get("/comparison-workflows/sources")
+def get_comparison_workflow_sources():
+    """Return only source choices currently registered for generic comparison."""
+    return {"sources": [adapter.source.to_dict() for adapter in _generic_comparison_adapters()]}
+
+
+@app.post("/comparison-workflows", status_code=202)
+def start_comparison_workflow(payload: ComparisonWorkflowRequest, background_tasks: BackgroundTasks):
+    try:
+        sources = [SourceReference(**item) for item in payload.source_preferences]
+        intent = interpret_comparison_workflow(
+            payload.user_request,
+            context=payload.context,
+            source_preferences=sources or None,
+            allowed_sources=tuple(adapter.source for adapter in _generic_comparison_adapters()),
+            provider=_comparison_interpretation_provider(),
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    workflow_id = str(uuid.uuid4())
+    session: dict[str, Any] = {"intent": intent, "comparison_id": None, "comparison_status": None}
+    if get_clarification_details(intent)["ready_for_execution"]:
+        try:
+            _queue_confirmed_workflow(session, background_tasks)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+    with _comparison_workflows_lock:
+        _comparison_workflows[workflow_id] = session
+    return _workflow_payload(workflow_id, session)
+
+
+@app.get("/comparison-workflows/{workflow_id}")
+def get_comparison_workflow(workflow_id: str):
+    with _comparison_workflows_lock:
+        session = _comparison_workflows.get(workflow_id)
+        if session is None:
+            raise HTTPException(404, "Comparison workflow not found")
+        session = dict(session)
+    comparison_id = session.get("comparison_id")
+    if comparison_id:
+        result = store.get_comparison_result(comparison_id)
+        if result is not None:
+            session["comparison_status"] = result["status"]
+            with _comparison_workflows_lock:
+                current = _comparison_workflows.get(workflow_id)
+                if current is not None:
+                    current["comparison_status"] = result["status"]
+    return _workflow_payload(workflow_id, session)
+
+
+@app.post("/comparison-workflows/{workflow_id}/confirm", status_code=202)
+def confirm_comparison_workflow(
+    workflow_id: str,
+    payload: ComparisonWorkflowConfirmation,
+    background_tasks: BackgroundTasks,
+):
+    with _comparison_workflows_lock:
+        session = _comparison_workflows.get(workflow_id)
+        if session is None:
+            raise HTTPException(404, "Comparison workflow not found")
+        if session.get("comparison_id"):
+            raise HTTPException(409, "This workflow has already started execution")
+        try:
+            updated = confirm_comparison_intent(session["intent"], ConfirmationPayload(payload.values))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+        session["intent"] = updated
+        if get_clarification_details(updated)["ready_for_execution"]:
+            try:
+                _queue_confirmed_workflow(session, background_tasks)
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(422, str(exc)) from exc
+    return _workflow_payload(workflow_id, session)
 
 
 @app.post("/comparisons", status_code=202)

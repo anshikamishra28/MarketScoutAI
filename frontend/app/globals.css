@@ -27,3 +27,37 @@
 .retail-price-heading .muted{font-size:11px;margin:6px 0 0}
 .retail-price-section .comparison-panel{padding-top:17px}
 @media(max-width:480px){.workspace-switch{width:100%}.workspace-switch button{flex:1}.retail-price-section{padding-top:19px}}
+
+.comparison-mode-switch{display:flex;gap:7px;margin:17px 0 0}
+.comparison-mode-switch button{border:1px solid var(--line);border-radius:7px;padding:8px 12px;background:#fff;color:#5d6c62;font:600 10px 'DM Sans',sans-serif;cursor:pointer}
+.comparison-mode-switch button[aria-pressed="true"]{border-color:#a9c5b2;background:#eef5ef;color:var(--green-dark)}
+.comparison-workflow-form{display:grid;gap:9px;margin-top:12px}
+.comparison-workflow-form>label,.workflow-source-list legend{font-size:10px;font-weight:650;color:#536359}
+.comparison-workflow-form textarea{width:100%;resize:vertical;border:1px solid #dce5df;border-radius:7px;padding:11px;background:#fff;color:var(--ink);font:12px/1.55 'DM Sans',sans-serif}
+.comparison-workflow-form textarea:focus,.workflow-confirmation>input:focus{outline:2px solid #b8d4c3;border-color:#91b49d}
+.workflow-source-list{display:flex;flex-wrap:wrap;gap:8px;border:0;padding:0;margin:2px 0}
+.workflow-source-list legend{margin-bottom:7px}
+.workflow-source-option{display:inline-flex;align-items:center;gap:7px;border:1px solid #e1e8e3;border-radius:6px;padding:8px 10px;background:#fff;font-size:10px;color:#4f6156}
+.workflow-source-option input,.workflow-confirmation label input{accent-color:var(--green)}
+.workflow-source-option small{color:#859188;font-size:9px}
+.workflow-draft{display:grid;gap:13px;margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
+.workflow-draft h3{font:700 12px Manrope;margin:0 0 8px;color:#35473b}
+.workflow-state{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:11px;color:#405348}
+.workflow-state span,.workflow-note{font-size:10px;color:#78867e}
+.workflow-note{margin:0;line-height:1.5}
+.workflow-proposals,.workflow-issues ul{display:grid;gap:8px;padding:0;margin:0;list-style:none}
+.workflow-proposals li,.workflow-issues li{border:1px solid #e7ede9;border-radius:7px;padding:10px;background:#fff;font-size:10px}
+.workflow-proposals li>strong{margin-right:8px}
+.workflow-proposals li p,.workflow-issues li p{margin:6px 0 0;color:#67766d;overflow-wrap:anywhere}
+.provenance-tag{display:inline-flex;border-radius:99px;padding:3px 6px;background:#f2f4f2;color:#68766e;font-size:8px;text-transform:uppercase;letter-spacing:.03em}
+.workflow-issues{border:1px solid #f0ded8;border-radius:8px;padding:12px;background:#fffaf8}
+.workflow-issues li strong{color:#774d42}
+.workflow-issues li small{display:block;margin-top:5px;color:#87938b}
+.workflow-confirmations{display:grid;gap:9px}
+.workflow-confirmation{display:grid;gap:6px;border:1px solid #e7ede9;border-radius:7px;padding:10px;background:#fff}
+.workflow-confirmation label{display:flex;align-items:center;gap:7px;color:#526258;font-size:9px}
+.workflow-confirmation code{font-size:9px;color:#68776f;overflow-wrap:anywhere}
+.workflow-confirmation>input{width:100%;border:1px solid #dce5df;border-radius:6px;padding:8px;color:var(--ink);font:11px 'DM Sans',sans-serif}
+.workflow-confirmation small{font-size:9px;color:#89958d;overflow-wrap:anywhere}
+.comparison-mode-switch button:focus-visible,.workflow-source-option:focus-within,.workflow-confirmation label:focus-within{outline:2px solid #91b49d;outline-offset:2px}
+@media(max-width:600px){.comparison-mode-switch{display:grid;grid-template-columns:1fr 1fr}.comparison-mode-switch button{padding:9px 7px}.workflow-state{display:grid}}

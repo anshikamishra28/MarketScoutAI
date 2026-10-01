@@ -17,6 +17,10 @@ import type {
   ComparisonResult,
   ComparisonStatusResponse,
   StartComparisonResponse,
+  ComparisonWorkflowConfirmation,
+  ComparisonWorkflowRequest,
+  ComparisonWorkflowResponse,
+  SourceReference,
 } from "../types/comparison";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -79,6 +83,31 @@ export async function getComparison(comparisonId: string): Promise<ComparisonRes
   return comparisonJson<ComparisonResult>(
     await fetch(`${API}/comparisons/${encodeURIComponent(comparisonId)}`),
   );
+}
+
+export async function getComparisonWorkflowSources(): Promise<SourceReference[]> {
+  const response = await comparisonJson<{ sources: SourceReference[] }>(await fetch(`${API}/comparison-workflows/sources`));
+  return response.sources;
+}
+
+export async function startComparisonWorkflow(request: ComparisonWorkflowRequest): Promise<ComparisonWorkflowResponse> {
+  return comparisonJson<ComparisonWorkflowResponse>(await fetch(`${API}/comparison-workflows`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  }));
+}
+
+export async function getComparisonWorkflow(workflowId: string): Promise<ComparisonWorkflowResponse> {
+  return comparisonJson<ComparisonWorkflowResponse>(await fetch(`${API}/comparison-workflows/${encodeURIComponent(workflowId)}`));
+}
+
+export async function confirmComparisonWorkflow(workflowId: string, confirmation: ComparisonWorkflowConfirmation): Promise<ComparisonWorkflowResponse> {
+  return comparisonJson<ComparisonWorkflowResponse>(await fetch(`${API}/comparison-workflows/${encodeURIComponent(workflowId)}/confirm`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(confirmation),
+  }));
 }
 
 export async function startPriceComparison(request: PriceComparisonRequest): Promise<StartPriceComparisonResponse> {
