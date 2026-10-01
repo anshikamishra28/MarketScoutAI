@@ -9,8 +9,11 @@ import { ResearchPrompt } from "../components/ResearchPrompt";
 import { ResearchReport } from "../components/ResearchReport";
 import { SourcesList } from "../components/SourcesList";
 import { PriceComparisonPanel } from "../components/PriceComparisonPanel";
-import { getResearchDetails, getResearchReport, getResearchSources, getResearchStatus, startResearch } from "../lib/api";
+import { ComparisonPrompt } from "../components/ComparisonPrompt";
+import { ComparisonResult } from "../components/ComparisonResult";
+import { getComparison, getComparisonStatus, getResearchDetails, getResearchReport, getResearchSources, getResearchStatus, startComparison, startResearch } from "../lib/api";
 import type { ResearchRun, ResearchSource } from "../types/research";
+import type { ComparisonRequest, ComparisonResult as ComparisonResultData } from "../types/comparison";
 
 const terminal = (status: string) => status === "completed" || status === "failed";
 
@@ -23,6 +26,27 @@ export default function Home() {
   const [pollingError, setPollingError] = useState("");
   const [busy, setBusy] = useState(false);
   const [loadingFinalData, setLoadingFinalData] = useState(false);
+  const [comparisonId, setComparisonId] = useState("");
+  const [comparisonStatus, setComparisonStatus] = useState("");
+  const [comparisonResult, setComparisonResult] = useState<ComparisonResultData | null>(null);
+  const [comparisonError, setComparisonError] = useState("");
+  const [comparisonBusy, setComparisonBusy] = useState(false);
+
+  async function submitComparison(request: ComparisonRequest) {
+    setComparisonBusy(true);
+    setComparisonError("");
+    setComparisonResult(null);
+    setComparisonStatus("queued");
+    setComparisonId("");
+    try {
+      const started = await startComparison(request);
+      setComparisonId(started.comparison_id);
+      setComparisonStatus(started.status);
+    } catch (comparisonStartError) {
+      setComparisonError(comparisonStartError instanceof Error ? comparisonStartError.message : "Could not start comparison.");
+      setComparisonBusy(false);
+    }
+  }
 
   async function start(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -112,6 +136,33 @@ export default function Home() {
     return () => { cancelled = true; clearTimeout(timer); };
   }, [run?.id]);
 
+  useEffect(() => {
+    if (!comparisonId) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try {
+        const status = await getComparisonStatus(comparisonId);
+        if (cancelled) return;
+        setComparisonError("");
+        setComparisonStatus(status.status);
+        if (status.status === "completed" || status.status === "failed") {
+          const result = await getComparison(comparisonId);
+          if (cancelled) return;
+          setComparisonResult(result);
+          setComparisonBusy(false);
+          return;
+        }
+      } catch (comparisonPollError) {
+        if (cancelled) return;
+        setComparisonError(comparisonPollError instanceof Error ? `Connection issue. Retrying: ${comparisonPollError.message}` : "Connection issue. Retrying comparison status.");
+      }
+      if (!cancelled) timer = setTimeout(poll, 1500);
+    };
+    void poll();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [comparisonId]);
+
   const evidence = run?.evidence ?? [];
   const sourceCount = run?.sources_count ?? sources.length;
 
@@ -125,6 +176,9 @@ export default function Home() {
       <ResearchPrompt question={question} busy={busy} error={error} onQuestionChange={setQuestion} onSubmit={start} />
 
       <PriceComparisonPanel />
+
+      <ComparisonPrompt busy={comparisonBusy} error={comparisonError} onSubmit={submitComparison} />
+      <ComparisonResult result={comparisonResult} comparisonId={comparisonId} status={comparisonStatus} loading={comparisonBusy} error={comparisonError} />
 
       {run && <section className="workspace" aria-live="polite">
         <div className="section-head">

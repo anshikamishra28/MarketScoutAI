@@ -12,6 +12,12 @@ import type {
   PriceComparisonStatusResponse,
   StartPriceComparisonResponse,
 } from "../types/price-comparison";
+import type {
+  ComparisonRequest,
+  ComparisonResult,
+  ComparisonStatusResponse,
+  StartComparisonResponse,
+} from "../types/comparison";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -53,6 +59,26 @@ async function comparisonJson<T>(response: Response): Promise<T> {
     throw new Error(body || `Price comparison API request failed (${response.status})`);
   }
   return readJson<T>(response);
+}
+
+export async function startComparison(request: ComparisonRequest): Promise<StartComparisonResponse> {
+  return comparisonJson<StartComparisonResponse>(await fetch(`${API}/comparisons`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  }));
+}
+
+export async function getComparisonStatus(comparisonId: string): Promise<ComparisonStatusResponse> {
+  return comparisonJson<ComparisonStatusResponse>(
+    await fetch(`${API}/comparisons/${encodeURIComponent(comparisonId)}/status`),
+  );
+}
+
+export async function getComparison(comparisonId: string): Promise<ComparisonResult> {
+  return comparisonJson<ComparisonResult>(
+    await fetch(`${API}/comparisons/${encodeURIComponent(comparisonId)}`),
+  );
 }
 
 export async function startPriceComparison(request: PriceComparisonRequest): Promise<StartPriceComparisonResponse> {
