@@ -18,6 +18,7 @@ import type { ComparisonRequest, ComparisonResult as ComparisonResultData } from
 const terminal = (status: string) => status === "completed" || status === "failed";
 
 export default function Home() {
+  const [activeMode, setActiveMode] = useState<"research" | "compare">("research");
   const [question, setQuestion] = useState("");
   const [run, setRun] = useState<ResearchRun | null>(null);
   const [sources, setSources] = useState<ResearchSource[]>([]);
@@ -173,14 +174,19 @@ export default function Home() {
         <div className="header-caption"><span className="badge"><i /> Autonomous Market Intelligence</span></div>
       </header>
 
-      <ResearchPrompt question={question} busy={busy} error={error} onQuestionChange={setQuestion} onSubmit={start} />
+      <nav className="workspace-switch" aria-label="MarketScoutAI capabilities">
+        <button type="button" aria-pressed={activeMode === "research"} onClick={() => setActiveMode("research")}>
+          Market Research
+        </button>
+        <button type="button" aria-pressed={activeMode === "compare"} onClick={() => setActiveMode("compare")}>
+          Compare
+        </button>
+      </nav>
 
-      <PriceComparisonPanel />
+      <div hidden={activeMode !== "research"}>
+        <ResearchPrompt question={question} busy={busy} error={error} onQuestionChange={setQuestion} onSubmit={start} />
 
-      <ComparisonPrompt busy={comparisonBusy} error={comparisonError} onSubmit={submitComparison} />
-      <ComparisonResult result={comparisonResult} comparisonId={comparisonId} status={comparisonStatus} loading={comparisonBusy} error={comparisonError} />
-
-      {run && <section className="workspace" aria-live="polite">
+        {run && <section className="workspace" aria-live="polite">
         <div className="section-head">
           <div className="run-heading">
             <p className="eyebrow">RESEARCH RUN</p>
@@ -208,9 +214,24 @@ export default function Home() {
         {run.status === "failed" && <article className="panel failure"><h3>Research failed</h3><p>{run.error || "The research run ended without a completed report."}</p></article>}
         {run.status === "completed" && evidence.length === 0 && <p className="empty-note">No retained evidence was returned for this run.</p>}
         {run.status === "completed" && sourceCount === 0 && <p className="empty-note">No sources were returned for this run.</p>}
-      </section>}
+        </section>}
 
-      {!run && !busy && <section className="welcome-note"><strong>Start with a market question.</strong><span>Your run, evidence, coverage, sources, and report will appear here.</span></section>}
+        {!run && !busy && <section className="welcome-note"><strong>Start with a market question.</strong><span>Your run, evidence, coverage, sources, and report will appear here.</span></section>}
+      </div>
+
+      <div hidden={activeMode !== "compare"}>
+        <ComparisonPrompt busy={comparisonBusy} error={comparisonError} onSubmit={submitComparison} />
+        <ComparisonResult result={comparisonResult} comparisonId={comparisonId} status={comparisonStatus} loading={comparisonBusy} error={comparisonError} />
+        <section className="retail-price-section" aria-labelledby="retail-price-title">
+          <div className="retail-price-heading">
+            <p className="eyebrow">RETAILER PRICE CHECK</p>
+            <h2 id="retail-price-title">Check a product listing</h2>
+            <p className="muted">A separate retailer-specific price lookup is also available.</p>
+          </div>
+          <PriceComparisonPanel />
+        </section>
+      </div>
+
       <footer>MarketScoutAI <span>Evidence first. Conclusions traceable.</span></footer>
     </main>
   );
