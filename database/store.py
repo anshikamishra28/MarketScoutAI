@@ -14,6 +14,16 @@ from models.price_comparison import (
     RetailerResult,
     RetailerStatus,
 )
+from models.comparison import (
+    AttributeDefinition,
+    ComparisonRequest as GenericComparisonRequest,
+    ComparisonResult as GenericComparisonResult,
+    ComparisonStatus as GenericComparisonStatus,
+    EntityReference,
+    Observation,
+    SourceCheck,
+    SourceReference,
+)
 
 DB_PATH = os.getenv("MARKETSCOUT_DB", os.path.join(os.path.dirname(__file__), "market_scout.sqlite3"))
 
@@ -75,6 +85,77 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_price_retailer_checks_comparison ON price_retailer_checks(comparison_id);
         CREATE INDEX IF NOT EXISTS idx_price_observations_comparison ON price_observations(comparison_id);
+        CREATE TABLE IF NOT EXISTS comparison_runs (
+            comparison_id TEXT PRIMARY KEY,
+            user_request TEXT NOT NULL,
+            request_data TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('queued','running','completed','failed')),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            error TEXT,
+            analysis TEXT,
+            unresolved TEXT NOT NULL DEFAULT '[]',
+            errors TEXT NOT NULL DEFAULT '[]'
+        );
+        CREATE TABLE IF NOT EXISTS comparison_entities (
+            entity_id TEXT PRIMARY KEY,
+            comparison_id TEXT NOT NULL REFERENCES comparison_runs(comparison_id) ON DELETE CASCADE,
+            entity_key TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            entity_type TEXT,
+            identifiers TEXT NOT NULL DEFAULT '{}',
+            aliases TEXT NOT NULL DEFAULT '[]',
+            UNIQUE(comparison_id, entity_key),
+            UNIQUE(comparison_id, entity_id)
+        );
+        CREATE TABLE IF NOT EXISTS comparison_attributes (
+            attribute_id TEXT PRIMARY KEY,
+            comparison_id TEXT NOT NULL REFERENCES comparison_runs(comparison_id) ON DELETE CASCADE,
+            attribute_key TEXT NOT NULL,
+            label TEXT NOT NULL,
+            value_type TEXT NOT NULL CHECK(value_type IN ('scalar','range','categorical','boolean','structured')),
+            unit TEXT,
+            currency TEXT,
+            comparison_rule TEXT,
+            UNIQUE(comparison_id, attribute_key),
+            UNIQUE(comparison_id, attribute_id)
+        );
+        CREATE TABLE IF NOT EXISTS comparison_source_checks (
+            source_check_id TEXT PRIMARY KEY,
+            comparison_id TEXT NOT NULL REFERENCES comparison_runs(comparison_id) ON DELETE CASCADE,
+            source_key TEXT NOT NULL,
+            source_name TEXT NOT NULL,
+            source_type TEXT,
+            source_url TEXT,
+            status TEXT NOT NULL CHECK(status IN ('pending','checked','unavailable','blocked','failed','unsupported')),
+            checked_at TEXT,
+            diagnostics TEXT,
+            error TEXT,
+            UNIQUE(comparison_id, source_key),
+            UNIQUE(comparison_id, source_check_id)
+        );
+        CREATE TABLE IF NOT EXISTS comparison_observations (
+            observation_id TEXT PRIMARY KEY,
+            comparison_id TEXT NOT NULL REFERENCES comparison_runs(comparison_id) ON DELETE CASCADE,
+            entity_id TEXT NOT NULL,
+            attribute_id TEXT NOT NULL,
+            source_check_id TEXT NOT NULL,
+            raw_value TEXT NOT NULL,
+            normalized_value TEXT,
+            value_type TEXT NOT NULL CHECK(value_type IN ('scalar','range','categorical','boolean','structured')),
+            unit TEXT,
+            currency TEXT,
+            observed_at TEXT NOT NULL,
+            source_url TEXT,
+            context TEXT,
+            FOREIGN KEY(comparison_id, entity_id) REFERENCES comparison_entities(comparison_id, entity_id) ON DELETE CASCADE,
+            FOREIGN KEY(comparison_id, attribute_id) REFERENCES comparison_attributes(comparison_id, attribute_id) ON DELETE CASCADE,
+            FOREIGN KEY(comparison_id, source_check_id) REFERENCES comparison_source_checks(comparison_id, source_check_id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_comparison_entities_run ON comparison_entities(comparison_id);
+        CREATE INDEX IF NOT EXISTS idx_comparison_attributes_run ON comparison_attributes(comparison_id);
+        CREATE INDEX IF NOT EXISTS idx_comparison_source_checks_run ON comparison_source_checks(comparison_id);
+        CREATE INDEX IF NOT EXISTS idx_comparison_observations_run ON comparison_observations(comparison_id);
         """)
         columns = {row[1] for row in db.execute("PRAGMA table_info(research_runs)")}
         if "coverage" not in columns:
@@ -319,3 +400,237 @@ def get_price_comparison(comparison_id, include_diagnostics=True):
     comparison["retailer_checks"] = get_price_retailer_checks(comparison_id, include_diagnostics=include_diagnostics)
     comparison["offers"] = get_price_observations(comparison_id)
     return comparison
+
+
+def _generic_value(value):
+    """Convert Stage 1 JSON-compatible values to JSON without losing types."""
+    from enum import Enum
+
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, Decimal):
+        return format(value, "f")
+    if isinstance(value, dict):
+        return {key: _generic_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_generic_value(item) for item in value]
+    return value
+
+
+def _generic_json(value):
+    return json.dumps(_generic_value(value), ensure_ascii=False, allow_nan=False)
+
+
+def _generic_request_dict(request):
+    if isinstance(request, GenericComparisonRequest):
+        return request.to_dict()
+    if isinstance(request, dict):
+        return GenericComparisonRequest(**request).to_dict()
+    raise ValueError("request must be a generic ComparisonRequest or dictionary")
+
+
+def _generic_entity(value):
+    if isinstance(value, dict):
+        value = EntityReference(**value)
+    if not isinstance(value, EntityReference):
+        raise ValueError("entity must be an EntityReference or dictionary")
+    return value
+
+
+def _generic_attribute(value):
+    if isinstance(value, dict):
+        value = AttributeDefinition(**value)
+    if not isinstance(value, AttributeDefinition):
+        raise ValueError("attribute must be an AttributeDefinition or dictionary")
+    return value
+
+
+def _generic_source_check(value):
+    if isinstance(value, dict):
+        value = SourceCheck(**value)
+    if not isinstance(value, SourceCheck):
+        raise ValueError("source_check must be a SourceCheck or dictionary")
+    return value
+
+
+def _generic_observation(value):
+    if isinstance(value, dict):
+        value = Observation(**value)
+    if not isinstance(value, Observation):
+        raise ValueError("observation must be an Observation or dictionary")
+    return value
+
+
+def create_comparison_run(comparison_id, request, status=GenericComparisonStatus.QUEUED,
+                          created_at=None, updated_at=None):
+    """Create an additive, domain-neutral comparison and its request dimensions."""
+    comparison_id = comparison_id.strip() if isinstance(comparison_id, str) else ""
+    if not comparison_id:
+        raise ValueError("comparison_id is required")
+    try:
+        status = GenericComparisonStatus(status).value
+    except (ValueError, TypeError) as exc:
+        raise ValueError("status must be queued, running, completed, or failed") from exc
+    request_data = _generic_request_dict(request)
+    created_at = _comparison_timestamp(created_at)
+    updated_at = _comparison_timestamp(updated_at) if updated_at is not None else created_at
+    with connect() as db:
+        db.execute("""INSERT INTO comparison_runs
+            (comparison_id,user_request,request_data,status,created_at,updated_at)
+            VALUES(?,?,?,?,?,?)""", (comparison_id, request_data["user_request"],
+            _generic_json(request_data), status, created_at, updated_at))
+        for entity_data in request_data["entities"]:
+            entity = EntityReference(**entity_data)
+            db.execute("""INSERT INTO comparison_entities
+                (entity_id,comparison_id,entity_key,display_name,entity_type,identifiers,aliases)
+                VALUES(?,?,?,?,?,?,?)""", (str(uuid.uuid4()), comparison_id, entity.key,
+                entity.display_name, entity.entity_type, _generic_json(entity.identifiers),
+                _generic_json(entity.aliases)))
+        for attribute_data in request_data["attributes"]:
+            attribute = AttributeDefinition(**attribute_data)
+            db.execute("""INSERT INTO comparison_attributes
+                (attribute_id,comparison_id,attribute_key,label,value_type,unit,currency,comparison_rule)
+                VALUES(?,?,?,?,?,?,?,?)""", (str(uuid.uuid4()), comparison_id, attribute.key,
+                attribute.label, attribute.value_type.value, attribute.unit, attribute.currency,
+                attribute.comparison_rule))
+    return comparison_id
+
+
+def update_comparison_run(comparison_id, **fields):
+    """Update generic comparison lifecycle/output fields."""
+    allowed = {"status", "updated_at", "error", "analysis", "unresolved", "errors"}
+    values = {key: value for key, value in fields.items() if key in allowed}
+    if "status" in values:
+        try:
+            values["status"] = GenericComparisonStatus(values["status"]).value
+        except (ValueError, TypeError) as exc:
+            raise ValueError("status must be queued, running, completed, or failed") from exc
+    if "updated_at" not in values:
+        values["updated_at"] = _comparison_timestamp()
+    else:
+        values["updated_at"] = _comparison_timestamp(values["updated_at"])
+    for key in ("unresolved", "errors"):
+        if key in values:
+            if not isinstance(values[key], list) or not all(isinstance(item, str) for item in values[key]):
+                raise ValueError(f"{key} must be a list of strings")
+            values[key] = _generic_json(values[key])
+    if not values:
+        return
+    with connect() as db:
+        db.execute("UPDATE comparison_runs SET " + ",".join(f"{key}=?" for key in values) +
+                   " WHERE comparison_id=?", (*values.values(), comparison_id))
+
+
+def add_comparison_entities(comparison_id, entities):
+    """Persist request-local entities for an existing generic comparison."""
+    ids = []
+    with connect() as db:
+        for item in entities:
+            entity = _generic_entity(item)
+            entity_id = str(uuid.uuid4())
+            db.execute("""INSERT INTO comparison_entities
+                (entity_id,comparison_id,entity_key,display_name,entity_type,identifiers,aliases)
+                VALUES(?,?,?,?,?,?,?)""", (entity_id, comparison_id, entity.key, entity.display_name,
+                entity.entity_type, _generic_json(entity.identifiers), _generic_json(entity.aliases)))
+            ids.append(entity_id)
+    return ids
+
+
+def add_comparison_attributes(comparison_id, attributes):
+    """Persist dynamic attributes for an existing generic comparison."""
+    ids = []
+    with connect() as db:
+        for item in attributes:
+            attribute = _generic_attribute(item)
+            attribute_id = str(uuid.uuid4())
+            db.execute("""INSERT INTO comparison_attributes
+                (attribute_id,comparison_id,attribute_key,label,value_type,unit,currency,comparison_rule)
+                VALUES(?,?,?,?,?,?,?,?)""", (attribute_id, comparison_id, attribute.key, attribute.label,
+                attribute.value_type.value, attribute.unit, attribute.currency, attribute.comparison_rule))
+            ids.append(attribute_id)
+    return ids
+
+
+def upsert_comparison_source_check(comparison_id, source_check):
+    """Persist the state of a generic source check (not necessarily a retailer)."""
+    check = _generic_source_check(source_check)
+    check_id = str(uuid.uuid4())
+    source = check.source
+    with connect() as db:
+        db.execute("""INSERT INTO comparison_source_checks
+            (source_check_id,comparison_id,source_key,source_name,source_type,source_url,status,checked_at,diagnostics,error)
+            VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(comparison_id,source_key) DO UPDATE SET
+            source_name=excluded.source_name,source_type=excluded.source_type,source_url=excluded.source_url,
+            status=excluded.status,checked_at=excluded.checked_at,diagnostics=excluded.diagnostics,error=excluded.error""",
+            (check_id, comparison_id, source.key, source.name, source.source_type, source.url,
+             check.status.value, check.checked_at,
+             _generic_json(check.diagnostics) if check.diagnostics is not None else None, check.error))
+        row = db.execute("SELECT source_check_id FROM comparison_source_checks WHERE comparison_id=? AND source_key=?",
+                         (comparison_id, source.key)).fetchone()
+    return row["source_check_id"]
+
+
+def add_comparison_observation(comparison_id, observation):
+    """Persist a raw/normalized observation linked to this run's three references."""
+    item = _generic_observation(observation)
+    observation_id = str(uuid.uuid4())
+    with connect() as db:
+        entity = db.execute("SELECT entity_id FROM comparison_entities WHERE comparison_id=? AND entity_key=?",
+                            (comparison_id, item.entity_key)).fetchone()
+        attribute = db.execute("SELECT attribute_id FROM comparison_attributes WHERE comparison_id=? AND attribute_key=?",
+                               (comparison_id, item.attribute_key)).fetchone()
+        source = db.execute("SELECT source_check_id FROM comparison_source_checks WHERE comparison_id=? AND source_key=?",
+                            (comparison_id, item.source_key)).fetchone()
+        if not entity or not attribute or not source:
+            raise ValueError("observation entity, attribute, and source check must exist in this comparison")
+        db.execute("""INSERT INTO comparison_observations
+            (observation_id,comparison_id,entity_id,attribute_id,source_check_id,raw_value,normalized_value,
+             value_type,unit,currency,observed_at,source_url,context)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""", (observation_id, comparison_id, entity["entity_id"],
+            attribute["attribute_id"], source["source_check_id"], _generic_json(item.raw_value),
+            _generic_json(item.normalized_value), item.value_type.value, item.unit, item.currency,
+            item.observed_at, item.source_url, _generic_json(item.context) if item.context is not None else None))
+    return observation_id
+
+
+def get_comparison_result(comparison_id):
+    """Read a complete generic comparison result, or None when absent."""
+    with connect() as db:
+        run = db.execute("SELECT * FROM comparison_runs WHERE comparison_id=?", (comparison_id,)).fetchone()
+        if not run:
+            return None
+        entities = db.execute("SELECT * FROM comparison_entities WHERE comparison_id=? ORDER BY rowid", (comparison_id,)).fetchall()
+        attributes = db.execute("SELECT * FROM comparison_attributes WHERE comparison_id=? ORDER BY rowid", (comparison_id,)).fetchall()
+        checks = db.execute("SELECT * FROM comparison_source_checks WHERE comparison_id=? ORDER BY rowid", (comparison_id,)).fetchall()
+        observations = db.execute("""SELECT o.*,e.entity_key,a.attribute_key,s.source_key
+            FROM comparison_observations o
+            JOIN comparison_entities e ON e.comparison_id=o.comparison_id AND e.entity_id=o.entity_id
+            JOIN comparison_attributes a ON a.comparison_id=o.comparison_id AND a.attribute_id=o.attribute_id
+            JOIN comparison_source_checks s ON s.comparison_id=o.comparison_id AND s.source_check_id=o.source_check_id
+            WHERE o.comparison_id=? ORDER BY o.rowid""", (comparison_id,)).fetchall()
+    request = GenericComparisonRequest(**json.loads(run["request_data"]))
+    entity_models = [EntityReference(key=row["entity_key"], display_name=row["display_name"],
+        entity_type=row["entity_type"], identifiers=json.loads(row["identifiers"] or "{}"),
+        aliases=json.loads(row["aliases"] or "[]")) for row in entities]
+    attribute_models = [AttributeDefinition(key=row["attribute_key"], label=row["label"],
+        value_type=row["value_type"], unit=row["unit"], currency=row["currency"],
+        comparison_rule=row["comparison_rule"]) for row in attributes]
+    source_models = [SourceCheck(source=SourceReference(key=row["source_key"], name=row["source_name"],
+        source_type=row["source_type"], url=row["source_url"]), status=row["status"],
+        checked_at=row["checked_at"], diagnostics=json.loads(row["diagnostics"]) if row["diagnostics"] is not None else None,
+        error=row["error"]) for row in checks]
+    observation_models = [Observation(entity_key=row["entity_key"], attribute_key=row["attribute_key"],
+        source_key=row["source_key"], raw_value=json.loads(row["raw_value"]),
+        normalized_value=json.loads(row["normalized_value"]) if row["normalized_value"] is not None else None,
+        value_type=row["value_type"], unit=row["unit"], currency=row["currency"],
+        observed_at=row["observed_at"], source_url=row["source_url"],
+        context=json.loads(row["context"]) if row["context"] is not None else None) for row in observations]
+    errors = json.loads(run["errors"] or "[]")
+    if run["error"] and run["error"] not in errors:
+        errors.append(run["error"])
+    result = GenericComparisonResult(comparison_id=run["comparison_id"], status=run["status"],
+        request=request, entities=entity_models, attributes=attribute_models, source_checks=source_models,
+        observations=observation_models, analysis=run["analysis"],
+        unresolved=json.loads(run["unresolved"] or "[]"), errors=errors,
+        created_at=run["created_at"], updated_at=run["updated_at"])
+    return result.to_dict()
