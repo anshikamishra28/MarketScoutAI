@@ -15,6 +15,9 @@ from models.price_comparison import (
     RetailerResult,
 )
 from services.price_comparison import start_price_comparison, execute_price_comparison
+from models.comparison import ComparisonRequest
+from services.comparison_service import execute_comparison, start_generic_comparison
+from tools.comparison_sources import ComparisonSourceAdapter
 
 store.init_db()
 app = FastAPI(title="MarketScoutAI API", description="Evidence-backed autonomous market research", version="1.0.0")
@@ -31,6 +34,19 @@ def _run_research(run_id: str, question: str):
 
 def _run_price_comparison(comparison_id: str):
     execute_price_comparison(comparison_id)
+
+
+def _generic_comparison_adapters() -> tuple[ComparisonSourceAdapter, ...]:
+    """Registry boundary for generic sources; no adapters are enabled yet."""
+    return ()
+
+
+def _run_generic_comparison(comparison_id: str, request: ComparisonRequest):
+    execute_comparison(
+        request,
+        adapters=_generic_comparison_adapters(),
+        comparison_id=comparison_id,
+    )
 
 
 def _comparison_detail(record: dict) -> dict:
@@ -73,6 +89,45 @@ def root():
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}
+
+
+@app.post("/comparisons", status_code=202)
+def start_generic_comparison_route(payload: ComparisonRequest, background_tasks: BackgroundTasks):
+    try:
+        record = start_generic_comparison(payload)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    comparison_id = record["comparison_id"]
+    background_tasks.add_task(_run_generic_comparison, comparison_id, payload)
+    return {
+        "comparison_id": comparison_id,
+        "status": "queued",
+        "status_url": f"/comparisons/{comparison_id}/status",
+    }
+
+
+@app.get("/comparisons/{comparison_id}/status")
+def get_generic_comparison_status(comparison_id: str):
+    result = store.get_comparison_result(comparison_id)
+    if result is None:
+        raise HTTPException(404, "Comparison not found")
+    errors = result.get("errors", [])
+    return {
+        "comparison_id": result["comparison_id"],
+        "status": result["status"],
+        "created_at": result["created_at"],
+        "updated_at": result["updated_at"],
+        "error": errors[0] if errors else None,
+        "errors": errors,
+    }
+
+
+@app.get("/comparisons/{comparison_id}")
+def get_generic_comparison(comparison_id: str):
+    result = store.get_comparison_result(comparison_id)
+    if result is None:
+        raise HTTPException(404, "Comparison not found")
+    return result
 
 
 @app.post("/research", status_code=202)

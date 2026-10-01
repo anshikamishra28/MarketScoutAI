@@ -50,6 +50,17 @@ def _failed_check(source: SourceReference, exc: Exception) -> SourceCheck:
     )
 
 
+def start_generic_comparison(request, comparison_id=None) -> dict:
+    """Validate and persist a queued generic comparison without running sources."""
+    validated = _validated_request(request)
+    comparison_id = comparison_id or str(uuid.uuid4())
+    store.create_comparison_run(comparison_id, validated, status=ComparisonStatus.QUEUED)
+    result = store.get_comparison_result(comparison_id)
+    if result is None:
+        raise RuntimeError("queued comparison could not be read after creation")
+    return result
+
+
 def _observation_validation_error(observations, source_key, entity_keys, attribute_keys):
     for item in observations:
         if not isinstance(item, Observation):
@@ -73,7 +84,13 @@ def execute_comparison(request, adapters=(), comparison_id=None) -> dict:
     validated = _validated_request(request)
     selected = _adapter_map(adapters)
     comparison_id = comparison_id or str(uuid.uuid4())
-    store.create_comparison_run(comparison_id, validated)
+    existing = store.get_comparison_result(comparison_id)
+    if existing is None:
+        store.create_comparison_run(comparison_id, validated)
+    elif existing["request"] != validated.to_dict():
+        raise ValueError("comparison_id already belongs to a different request")
+    elif existing["status"] != ComparisonStatus.QUEUED.value:
+        return existing
     store.update_comparison_run(comparison_id, status=ComparisonStatus.RUNNING.value)
 
     targets = validated.source_preferences or [adapter.source for adapter in selected.values()]
