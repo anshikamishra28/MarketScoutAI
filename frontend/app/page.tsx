@@ -8,13 +8,11 @@ import { ResearchMetrics } from "../components/ResearchMetrics";
 import { ResearchPrompt } from "../components/ResearchPrompt";
 import { ResearchReport } from "../components/ResearchReport";
 import { SourcesList } from "../components/SourcesList";
-import { PriceComparisonPanel } from "../components/PriceComparisonPanel";
-import { ComparisonPrompt } from "../components/ComparisonPrompt";
 import { ComparisonResult } from "../components/ComparisonResult";
 import { ComparisonWorkflow } from "../components/ComparisonWorkflow";
-import { getComparison, getComparisonStatus, getResearchDetails, getResearchReport, getResearchSources, getResearchStatus, startComparison, startResearch } from "../lib/api";
+import { getComparison, getComparisonStatus, getResearchDetails, getResearchReport, getResearchSources, getResearchStatus, startResearch } from "../lib/api";
 import type { ResearchRun, ResearchSource } from "../types/research";
-import type { ComparisonRequest, ComparisonResult as ComparisonResultData } from "../types/comparison";
+import type { ComparisonResult as ComparisonResultData } from "../types/comparison";
 
 const terminal = (status: string) => status === "completed" || status === "failed";
 
@@ -33,7 +31,21 @@ export default function Home() {
   const [comparisonResult, setComparisonResult] = useState<ComparisonResultData | null>(null);
   const [comparisonError, setComparisonError] = useState("");
   const [comparisonBusy, setComparisonBusy] = useState(false);
-  const [comparisonInputMode, setComparisonInputMode] = useState<"natural" | "structured">("natural");
+  const [theme, setTheme] = useState<"light" | "dark">("light");
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem("marketscout-theme");
+    const selected = saved === "dark" ? "dark" : "light";
+    setTheme(selected);
+    document.documentElement.dataset.theme = selected;
+  }, []);
+
+  function toggleTheme() {
+    const selected = theme === "light" ? "dark" : "light";
+    setTheme(selected);
+    document.documentElement.dataset.theme = selected;
+    window.localStorage.setItem("marketscout-theme", selected);
+  }
 
   function onWorkflowExecutionStarted(id: string, status: string) {
     setComparisonId(id);
@@ -43,20 +55,12 @@ export default function Home() {
     setComparisonBusy(true);
   }
 
-  async function submitComparison(request: ComparisonRequest) {
-    setComparisonBusy(true);
-    setComparisonError("");
-    setComparisonResult(null);
-    setComparisonStatus("queued");
+  function onComparisonRequestStarted() {
     setComparisonId("");
-    try {
-      const started = await startComparison(request);
-      setComparisonId(started.comparison_id);
-      setComparisonStatus(started.status);
-    } catch (comparisonStartError) {
-      setComparisonError(comparisonStartError instanceof Error ? comparisonStartError.message : "Could not start comparison.");
-      setComparisonBusy(false);
-    }
+    setComparisonStatus("");
+    setComparisonResult(null);
+    setComparisonError("");
+    setComparisonBusy(false);
   }
 
   async function start(event: FormEvent<HTMLFormElement>) {
@@ -181,7 +185,8 @@ export default function Home() {
     <main className="shell">
       <header className="dashboard-header">
         <a className="brand" href="#"><span className="mark">M</span> MarketScout<span>AI</span></a>
-        <div className="header-caption"><span className="badge"><i /> Autonomous Market Intelligence</span></div>
+        <div className="header-actions"><div className="header-caption"><span className="badge"><i /> Autonomous Market Intelligence</span></div>
+          <button type="button" className="theme-toggle" onClick={toggleTheme} aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`} aria-pressed={theme === "dark"}>{theme === "light" ? "Dark mode" : "Light mode"}</button></div>
       </header>
 
       <nav className="workspace-switch" aria-label="MarketScoutAI capabilities">
@@ -207,20 +212,16 @@ export default function Home() {
         </div>
         {pollingError && <p className="network-banner">{pollingError}</p>}
 
-        <ResearchMetrics run={run} sourceCount={sourceCount} evidenceCount={evidence.length} />
-
-        <div className="columns">
-          <ResearchActivity run={run} />
-          <RequirementCoverage run={run} />
-        </div>
-
-        <EvidenceLedger evidence={evidence} />
-        <SourcesList sources={sources} />
-        {run.status === "completed" && report ? <ResearchReport content={report} /> : run.status === "completed" ? (
+        {run.status === "completed" && report ? <ResearchReport content={report} question={run.question ?? question} coverage={run.coverage} evidence={evidence} sources={sources} conflicts={run.conflicts} /> : run.status === "completed" ? (
           <article className="panel report"><div className="panel-title"><h3>Final market intelligence report</h3></div>
             <p className="muted">{loadingFinalData ? "Loading the completed report…" : "The report is not ready from the API yet."}</p>
           </article>
         ) : null}
+        <ResearchMetrics run={run} sourceCount={sourceCount} evidenceCount={evidence.length} />
+        <RequirementCoverage run={run} />
+        {(run.status === "running" || run.status === "queued") ? <ResearchActivity run={run} /> : <details className="panel activity-history-disclosure"><summary className="disclosure-summary"><h3>Research activity</h3><span>{run.iterations} iterations · View timeline</span></summary><ResearchActivity run={run} /></details>}
+        <EvidenceLedger evidence={evidence} />
+        <SourcesList sources={sources} />
         {run.status === "failed" && <article className="panel failure"><h3>Research failed</h3><p>{run.error || "The research run ended without a completed report."}</p></article>}
         {run.status === "completed" && evidence.length === 0 && <p className="empty-note">No retained evidence was returned for this run.</p>}
         {run.status === "completed" && sourceCount === 0 && <p className="empty-note">No sources were returned for this run.</p>}
@@ -230,22 +231,8 @@ export default function Home() {
       </div>
 
       <div hidden={activeMode !== "compare"}>
-        <div className="comparison-mode-switch" role="group" aria-label="Comparison input mode">
-          <button type="button" aria-pressed={comparisonInputMode === "natural"} onClick={() => setComparisonInputMode("natural")}>Describe a comparison</button>
-          <button type="button" aria-pressed={comparisonInputMode === "structured"} onClick={() => setComparisonInputMode("structured")}>Structured input</button>
-        </div>
-        {comparisonInputMode === "natural"
-          ? <ComparisonWorkflow busy={comparisonBusy} error={comparisonError} onExecutionStarted={onWorkflowExecutionStarted} />
-          : <ComparisonPrompt busy={comparisonBusy} error={comparisonError} onSubmit={submitComparison} />}
+        <ComparisonWorkflow busy={comparisonBusy} error={comparisonError} onRequestStarted={onComparisonRequestStarted} onExecutionStarted={onWorkflowExecutionStarted} />
         <ComparisonResult result={comparisonResult} comparisonId={comparisonId} status={comparisonStatus} loading={comparisonBusy} error={comparisonError} />
-        <section className="retail-price-section" aria-labelledby="retail-price-title">
-          <div className="retail-price-heading">
-            <p className="eyebrow">RETAILER PRICE CHECK</p>
-            <h2 id="retail-price-title">Check a product listing</h2>
-            <p className="muted">A separate retailer-specific price lookup is also available.</p>
-          </div>
-          <PriceComparisonPanel />
-        </section>
       </div>
 
       <footer>MarketScoutAI <span>Evidence first. Conclusions traceable.</span></footer>

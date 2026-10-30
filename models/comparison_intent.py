@@ -18,6 +18,7 @@ class Provenance(str, Enum):
     USER_PROVIDED = "user_provided"
     PROPOSED = "proposed"
     USER_CONFIRMED = "user_confirmed"
+    SYSTEM_PROVIDED = "system_provided"
 
 
 @dataclass
@@ -93,7 +94,7 @@ class ComparisonIntent:
             try:
                 normalized[path.strip()] = Provenance(origin)
             except (TypeError, ValueError) as exc:
-                raise ValueError("provenance values must be user_provided, proposed, or user_confirmed") from exc
+                raise ValueError("provenance values must be user_provided, proposed, user_confirmed, or system_provided") from exc
         self.provenance = normalized
 
     def to_dict(self) -> dict[str, Any]:

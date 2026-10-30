@@ -94,7 +94,13 @@ def execute_comparison(request, adapters=(), comparison_id=None) -> dict:
         return existing
     store.update_comparison_run(comparison_id, status=ComparisonStatus.RUNNING.value)
 
-    targets = validated.source_preferences or [adapter.source for adapter in selected.values()]
+    default_adapters = [
+        adapter for adapter in selected.values()
+        if getattr(adapter, "default_when_unspecified", False) is True
+    ]
+    targets = validated.source_preferences or [
+        adapter.source for adapter in (default_adapters or list(selected.values()))
+    ]
     # Keep source preference order while ensuring a source is checked once.
     unique_targets = []
     seen_source_keys = set()

@@ -11,14 +11,14 @@ export interface StartResearchResponse {
 export interface ResearchPlan {
   research_goal: string;
   sub_questions: string[];
-  information_needed: string[];
+  information_needed?: string[];
   search_queries: string[];
 }
 
 export interface ResearchCoverage {
-  sufficient: string[];
-  weak: string[];
-  unanswered: string[];
+  sufficient?: string[];
+  weak?: string[];
+  unanswered?: string[];
   requirement_details?: RequirementCoverageDetail[];
 }
 

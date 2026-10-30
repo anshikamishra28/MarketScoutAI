@@ -5,23 +5,23 @@ interface Props { run: ResearchRun }
 export function RequirementCoverage({ run }: Props) {
   const requirements = run.plan?.information_needed ?? [];
   const details = run.coverage?.requirement_details ?? [];
-  const detailsByRequirement = new Map(details.map((detail) => [detail.requirement, detail]));
-  return <article className="panel coverage-panel">
-    <div className="panel-title"><h3>Requirement coverage</h3><span>{requirements.length} planned requirements</span></div>
-    {!requirements.length ? <div className="empty-state"><strong>Coverage is not available yet</strong><span>The API has not returned the research requirements.</span></div> : <ul className="coverage-list">
+  const byRequirement = new Map(details.map((detail) => [detail.requirement, detail]));
+  const supported = run.coverage?.sufficient?.length ?? 0;
+  const partial = run.coverage?.weak?.length ?? 0;
+  const unresolved = run.coverage?.unanswered?.length ?? 0;
+  return <section className="panel coverage-panel">
+    <div className="panel-title"><h3>Research coverage</h3><span>{requirements.length} requirements assessed</span></div>
+    <div className="coverage-summary"><div><strong>{supported}</strong><span>Supported</span></div><div><strong>{partial}</strong><span>Partially supported</span></div><div><strong>{unresolved}</strong><span>Unresolved</span></div></div>
+    {requirements.length > 0 && <details className="coverage-details"><summary>View each requirement</summary><ul className="coverage-list">
       {requirements.map((requirement, index) => {
-        const detail = detailsByRequirement.get(requirement);
+        const detail = byRequirement.get(requirement);
         const state = detail?.status ?? "Coverage details unavailable";
         const kind = state === "Supported" ? "supported" : state === "Weak" ? "weak" : state.startsWith("UNRESOLVED") ? "unresolved" : "unknown";
-        const evidence = detail?.supporting_evidence ?? [];
-        return <li className="coverage-row" key={`${index}-${requirement}`}>
-          <div className="coverage-copy"><span className="requirement-index">{String(index + 1).padStart(2, "0")}</span><span>{requirement}</span></div>
-          <span className={`coverage-badge ${kind}`}>{state}</span>
-          {detail?.supporting_evidence_count !== undefined && <p className="coverage-count">{detail.supporting_evidence_count} supporting evidence item{detail.supporting_evidence_count === 1 ? "" : "s"}</p>}
-          {evidence.length > 0 && <ul className="coverage-snippets">{evidence.map((snippet, snippetIndex) => <li key={`${snippetIndex}-${snippet}`}>{snippet}</li>)}</ul>}
-          {!evidence.length && detail && detail.supporting_evidence_count === 0 && <p className="coverage-empty">No retained evidence directly supports this requirement.</p>}
+        return <li className="coverage-row" key={`${index}-${requirement}`}><div className="coverage-copy"><span>{requirement}</span><span className={`coverage-badge ${kind}`}>{state}</span></div>
+          {detail?.supporting_evidence_count !== undefined && <small>{detail.supporting_evidence_count} supporting item{detail.supporting_evidence_count === 1 ? "" : "s"}</small>}
+          {!!detail?.supporting_evidence?.length && <ul className="coverage-snippets">{detail.supporting_evidence.slice(0, 3).map((snippet, snippetIndex) => <li key={`${snippetIndex}-${snippet}`}>{snippet}</li>)}</ul>}
         </li>;
       })}
-    </ul>}
-  </article>;
+    </ul></details>}
+  </section>;
 }

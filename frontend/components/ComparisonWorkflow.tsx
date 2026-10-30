@@ -1,146 +1,153 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
-import {
-  confirmComparisonWorkflow,
-  getComparisonWorkflow,
-  getComparisonWorkflowSources,
-  startComparisonWorkflow,
-} from "../lib/api";
-import type {
-  ComparisonWorkflowResponse,
-  JsonValue,
-  SourceReference,
-} from "../types/comparison";
+import { useState, type FormEvent } from "react";
+import { confirmComparisonWorkflow, getComparisonWorkflow, startComparisonWorkflow } from "../lib/api";
+import type { AttributeDefinition, ComparisonWorkflowIssue, ComparisonWorkflowResponse, EntityReference } from "../types/comparison";
 
-interface ComparisonWorkflowProps {
-  busy: boolean;
-  error: string;
-  onExecutionStarted: (comparisonId: string, status: string) => void;
+interface Props { busy: boolean; error: string; onRequestStarted: () => void; onExecutionStarted: (id: string, status: string) => void }
+const commonAttributes = ["Price", "Quality", "Availability", "Specifications"];
+
+function requestKey(value: string, prefix: string): string {
+  const key = value.toLocaleLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return /^[a-z]/.test(key) ? key : `${prefix}_${key || prefix}`;
 }
 
-function displayValue(value: JsonValue): string {
-  return typeof value === "string" ? value : JSON.stringify(value);
+function attributeType(label: string): AttributeDefinition["value_type"] {
+  if (/\b(price|cost|fee|charge)\b/i.test(label)) return "scalar";
+  if (/\b(availability|stock)\b/i.test(label)) return "categorical";
+  return "structured";
 }
 
-function maybeJson(value: string): JsonValue {
-  try {
-    return JSON.parse(value) as JsonValue;
-  } catch {
-    return value;
-  }
+function isTechnical(value: string): boolean {
+  return value.includes("/") || /value_type|comparison_rule|provenance|intent|identifier|source adapter|USER_CONFIRMED|USER_PROVIDED|PROPOSED|^\w+_[A-Z_]+$/.test(value);
+}
+function friendlyQuestion(issue: ComparisonWorkflowIssue, products: string[]): string {
+  const text = issue.clarification_question || issue.message || "";
+  if (/source/i.test(`${text} ${issue.code}`)) return "No verified shopping source is available for this comparison right now.";
+  if (/attribute|value_type|comparison_rule/i.test(`${text} ${issue.code} ${issue.target}`)) return "What would you like us to compare about these products?";
+  const quoted = text.match(/[“'\"]([^”'\"]+)[”'\"]/);
+  const item = quoted?.[1] || products[0] || "this product";
+  if (/version|variant|identified|identity|model|ambiguous|entity/i.test(`${text} ${issue.code} ${issue.target}`) || isTechnical(text)) return `Which version of ${item} do you mean?`;
+  return text && !isTechnical(text) ? text : "Which product detail should we use?";
+}
+function safeCandidates(issue: ComparisonWorkflowIssue): string[] {
+  return issue.candidates.filter((candidate): candidate is string => typeof candidate === "string" && !!candidate.trim() && !isTechnical(candidate));
 }
 
-export function ComparisonWorkflow({ busy, error, onExecutionStarted }: ComparisonWorkflowProps) {
-  const [request, setRequest] = useState("");
-  const [sources, setSources] = useState<SourceReference[]>([]);
-  const [selected, setSelected] = useState<string[]>([]);
+export function ComparisonWorkflow({ busy, error, onRequestStarted, onExecutionStarted }: Props) {
+  const [category, setCategory] = useState("");
+  const [products, setProducts] = useState(["", ""]);
+  const [selected, setSelected] = useState<string[]>(commonAttributes);
+  const [otherAttributes, setOtherAttributes] = useState("");
+  const [clarificationAnswer, setClarificationAnswer] = useState("");
   const [session, setSession] = useState<ComparisonWorkflowResponse | null>(null);
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const [confirmed, setConfirmed] = useState<Record<string, boolean>>({});
+  const [reviewed, setReviewed] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [errorText, setErrorText] = useState("");
+  const [requestError, setRequestError] = useState("");
 
-  useEffect(() => {
-    let cancelled = false;
-    getComparisonWorkflowSources().then((items) => { if (!cancelled) setSources(items); })
-      .catch((reason: unknown) => { if (!cancelled) setErrorText(reason instanceof Error ? reason.message : "Could not load comparison sources."); });
-    return () => { cancelled = true; };
-  }, []);
-
-  function acceptResponse(result: ComparisonWorkflowResponse) {
+  function show(result: ComparisonWorkflowResponse) {
+    setRequestError("");
     setSession(result);
+    setReviewed(false);
     if (result.comparison_id) onExecutionStarted(result.comparison_id, result.comparison_status ?? "queued");
-    const values: Record<string, string> = {};
-    for (const item of result.clarification.confirmations_required) values[item.path] = displayValue(item.proposed_value);
-    setDrafts(values);
-    setConfirmed({});
+  }
+
+  function makeRequest(extraAnswer = ""): string {
+    const attributes = [...selected, ...otherAttributes.split(",").map((item) => item.trim()).filter(Boolean)];
+    const categoryText = category.trim() ? ` in the ${category.trim()} category` : "";
+    const answerText = extraAnswer.trim() ? `. ${extraAnswer.trim()}` : "";
+    return `Compare ${products[0].trim()} with ${products[1].trim()}${categoryText} by ${[...new Set(attributes)].join(", ")}${answerText}.`;
+  }
+
+  function structuredRequest(): { entities: EntityReference[]; attributes: AttributeDefinition[] } {
+    const usedEntityKeys = new Set<string>();
+    const entities = products.map((product, index) => {
+      const display_name = product.trim();
+      const base = requestKey(display_name, `entity_${index + 1}`);
+      let key = base;
+      let suffix = 2;
+      while (usedEntityKeys.has(key)) key = `${base}_${suffix++}`;
+      usedEntityKeys.add(key);
+      return { key, display_name, identifiers: {}, aliases: [] };
+    });
+    const labels = [...new Set([...selected, ...otherAttributes.split(",").map((item) => item.trim()).filter(Boolean)])];
+    const usedAttributeKeys = new Set<string>();
+    const attributes = labels.map((label, index) => {
+      const base = requestKey(label, `attribute_${index + 1}`);
+      let key = base;
+      let suffix = 2;
+      while (usedAttributeKeys.has(key)) key = `${base}_${suffix++}`;
+      usedAttributeKeys.add(key);
+      return { key, label, value_type: attributeType(label) };
+    });
+    return { entities, attributes };
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!request.trim()) { setErrorText("Describe the entities and what you want to compare."); return; }
-    if (!selected.length) { setErrorText("Select at least one source to check."); return; }
-    setLoading(true);
-    setErrorText("");
-    setSession(null);
+    if (!products[0].trim() || !products[1].trim()) return;
+    await interpret(makeRequest());
+  }
+
+  async function interpret(userRequest: string) {
+    setLoading(true); setSession(null); setRequestError(""); onRequestStarted();
     try {
-      const preferences = sources.filter((source) => selected.includes(source.key));
-      acceptResponse(await startComparisonWorkflow({ user_request: request.trim(), source_preferences: preferences }));
+      show(await startComparisonWorkflow({
+        user_request: userRequest,
+        context: category.trim() ? { category: category.trim() } : {},
+        source_preferences: [],
+        ...structuredRequest(),
+      }));
+      setClarificationAnswer("");
     } catch (reason) {
-      setErrorText(reason instanceof Error ? reason.message : "Could not interpret this comparison request.");
+      setSession(null); setRequestError(reason instanceof Error ? reason.message : "We couldn't prepare this comparison. Please try again.");
     } finally { setLoading(false); }
   }
 
-  async function submitConfirmations() {
-    if (!session) return;
-    const values: Record<string, JsonValue> = {};
-    for (const [path, isConfirmed] of Object.entries(confirmed)) {
-      if (isConfirmed) values[path] = maybeJson(drafts[path] ?? "");
-    }
-    if (!Object.keys(values).length) { setErrorText("Select and confirm at least one proposed value before continuing."); return; }
-    setLoading(true);
-    setErrorText("");
+  async function continueClarification(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!clarificationAnswer.trim()) return;
+    await interpret(makeRequest(clarificationAnswer));
+  }
+
+  async function confirmInterpretation() {
+    if (!session || !reviewed) return;
+    const values = Object.fromEntries(session.clarification.confirmations_required.map((item) => [item.path, item.proposed_value]));
+    setLoading(true); setRequestError("");
     try {
       const updated = await confirmComparisonWorkflow(session.workflow_id, { values });
-      acceptResponse(await getComparisonWorkflow(updated.workflow_id));
+      show(await getComparisonWorkflow(updated.workflow_id));
     } catch (reason) {
-      setErrorText(reason instanceof Error ? reason.message : "Could not confirm the selected interpretation.");
+      setRequestError(reason instanceof Error ? reason.message : "We couldn't continue this comparison. Please review your request.");
     } finally { setLoading(false); }
   }
 
-  const intent = session?.intent;
-  const entities = intent?.request.entities ?? [];
-  const attributes = intent?.request.attributes ?? [];
-  const sourcePreferences = intent?.request.source_preferences ?? [];
-  const provenance = intent?.provenance ?? {};
+  const entities = session?.intent.request.entities ?? [];
+  const attributes = session?.intent.request.attributes ?? [];
+  const issues = session?.clarification.unresolved ?? [];
+  const needsSource = issues.some((issue) => /source/i.test(`${issue.code} ${issue.target} ${issue.message} ${issue.clarification_question ?? ""}`));
+  const questions = issues.filter((issue) => !/source/i.test(`${issue.code} ${issue.target} ${issue.message} ${issue.clarification_question ?? ""}`));
+  const confirmations = session?.clarification.confirmations_required ?? [];
+  const awaitingConfirmation = confirmations.length > 0;
 
-  return <section className="workspace comparison-workflow" aria-labelledby="natural-comparison-title">
-    <div className="section-head">
-      <div><p className="eyebrow">NATURAL-LANGUAGE COMPARISON</p><h2 id="natural-comparison-title">Describe the comparison</h2>
-        <p className="muted">Interpretations remain proposals until you explicitly confirm them.</p></div>
-    </div>
-    <form className="comparison-workflow-form" onSubmit={submit}>
-      <label htmlFor="comparison-natural-request">What would you like to compare?</label>
-      <textarea id="comparison-natural-request" value={request} onChange={(event) => setRequest(event.target.value)} placeholder="Compare two services by monthly price and contract length" disabled={loading || busy} rows={3} />
-      <fieldset className="workflow-source-list"><legend>Select sources</legend>
-        {sources.length ? sources.map((source) => <label key={source.key} className="workflow-source-option">
-          <input type="checkbox" checked={selected.includes(source.key)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, source.key] : current.filter((key) => key !== source.key))} disabled={loading || busy} />
-          <span>{source.name}</span><small>{source.source_type ?? "source"}</small>
-        </label>) : <p className="muted">No comparison sources are currently registered.</p>}
-      </fieldset>
-      {(errorText || error) && <p className="generic-error" role="alert">{errorText || error}</p>}
-      <button className="generic-submit" type="submit" disabled={loading || busy || sources.length === 0}>{loading ? "Interpreting..." : "Interpret comparison"}</button>
+  return <section className="workspace comparison-workflow" aria-labelledby="compare-title">
+    <header className="comparison-intro"><p className="eyebrow">MARKET COMPARISON</p><h1 id="compare-title">Compare Products</h1><p>Compare two products side by side.</p></header>
+    <form className="simple-comparison-form" onSubmit={submit}>
+      <label>Category <input value={category} onChange={(event) => setCategory(event.target.value)} placeholder="Chocolate, laptop, headphones..." disabled={loading || busy} /></label>
+      <div className="comparison-product-fields">{products.map((product, index) => <label key={index}>Product {index + 1}<input value={product} onChange={(event) => setProducts((current) => current.map((value, item) => item === index ? event.target.value : value))} placeholder="Enter a product" required disabled={loading || busy} /></label>)}</div>
+      <fieldset className="attribute-picker"><legend>Compare by</legend><div>{commonAttributes.map((attribute) => <label key={attribute} className={`attribute-chip ${selected.includes(attribute) ? "selected" : ""}`}><input type="checkbox" checked={selected.includes(attribute)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, attribute] : current.filter((item) => item !== attribute))} disabled={loading || busy} />{attribute}</label>)}</div><label className="custom-attribute-label">Other things to compare (optional)<input value={otherAttributes} onChange={(event) => setOtherAttributes(event.target.value)} placeholder="Taste, ingredients, battery life, camera, etc." disabled={loading || busy} /></label></fieldset>
+      {(!selected.length && !otherAttributes.trim()) && <p className="form-hint">Choose at least one comparison attribute.</p>}
+      {(error || requestError) && <p className="generic-error" role="alert">We couldn't prepare this comparison. Please try again.</p>}
+      <button className="generic-submit" type="submit" disabled={loading || busy || !products[0].trim() || !products[1].trim() || (!selected.length && !otherAttributes.trim())}>{loading || busy ? "Comparing products..." : "Compare Products"}</button>
     </form>
 
-    {session && <div className="workflow-draft" aria-live="polite">
-      <div className="workflow-state"><strong>Interpretation: {intent?.state === "ready" ? "Ready" : "Needs clarification"}</strong>
-        {session.comparison_id && <span>Execution started · {session.comparison_status}</span>}
-      </div>
-      <p className="workflow-note">Proposed values are not verified. Confirm only the details you want used.</p>
-      {!!entities.length && <section><h3>Entities</h3><ul className="workflow-proposals">{entities.map((entity) => <li key={entity.key}>
-        <strong>{entity.display_name}</strong><span className="provenance-tag">{provenance[`entities.${entity.key}.display_name`] ?? "user_provided"}</span>
-        {entity.entity_type && <p>Type: {entity.entity_type} <span className="provenance-tag">{provenance[`entities.${entity.key}.entity_type`] ?? "proposed"}</span></p>}
-        {Object.entries(entity.identifiers ?? {}).map(([key, value]) => <p key={key}><code>{key}</code>: {displayValue(value as JsonValue)} <span className="provenance-tag">{provenance[`entities.${entity.key}.identifiers.${key}`] ?? "proposed"}</span></p>)}
-      </li>)}</ul></section>}
-      {!!attributes.length && <section><h3>Requested attributes</h3><ul className="workflow-proposals">{attributes.map((attribute) => <li key={attribute.key}>
-        <strong>{attribute.label}</strong><span className="provenance-tag">{provenance[`attributes.${attribute.key}.label`] ?? "proposed"}</span>
-        <p>{attribute.value_type}{attribute.unit ? ` · ${attribute.unit}` : ""}{attribute.comparison_rule ? ` · ${attribute.comparison_rule}` : ""}</p>
-      </li>)}</ul></section>}
-      {!!sourcePreferences.length && <section><h3>Sources</h3><ul className="workflow-proposals">{sourcePreferences.map((source) => <li key={source.key}><strong>{source.name}</strong><span className="provenance-tag">{provenance[`sources.${source.key}.key`] ?? "user_provided"}</span></li>)}</ul></section>}
-      {!!session.clarification.unresolved.length && <section className="workflow-issues"><h3>Needs your attention</h3><ul>{session.clarification.unresolved.map((issue, index) => <li key={`${issue.code}-${index}`}>
-        <strong>{issue.clarification_question ?? issue.message}</strong><p>{issue.message}</p><small>Target: {issue.target}</small>
-        {issue.candidates.length > 0 && <p>Candidates: {issue.candidates.map((candidate) => displayValue(candidate)).join(", ")}</p>}
-      </li>)}</ul></section>}
-      {!!session.clarification.confirmations_required.length && <section className="workflow-confirmations"><h3>Confirm proposed details</h3>
-        {session.clarification.confirmations_required.map((item) => <div className="workflow-confirmation" key={item.path}>
-          <label><input type="checkbox" checked={confirmed[item.path] ?? false} onChange={(event) => setConfirmed((current) => ({ ...current, [item.path]: event.target.checked }))} disabled={loading || busy} /> I confirm or correct this proposed value</label>
-          <code>{item.path}</code><input aria-label={`Proposed value for ${item.path}`} value={drafts[item.path] ?? ""} onChange={(event) => setDrafts((current) => ({ ...current, [item.path]: event.target.value }))} disabled={loading || busy} />
-          <small>Proposed: {displayValue(item.proposed_value)} · Needs confirmation</small>
-        </div>)}
-        <button type="button" className="generic-submit" onClick={submitConfirmations} disabled={loading || busy}>{loading ? "Updating..." : "Submit confirmations"}</button>
+    {session && !session.comparison_id && <section className="comparison-clarification" aria-live="polite">
+      {entities.length >= 2 && attributes.length > 0 && <section className="generic-result comparison-preview" aria-label="Unverified comparison preview">
+        <header className="generic-result-heading"><div><p className="eyebrow">COMPARISON PREVIEW</p><h2>Product comparison</h2></div><span className="generic-status">Not verified</span></header>
+        <p className="generic-muted">No product values have been verified yet. Missing information is left blank rather than guessed.</p>
+        <div className="generic-table-scroll"><table className="generic-comparison-table"><thead><tr><th scope="col">Attribute</th>{entities.map((entity) => <th scope="col" key={entity.key}>{entity.display_name}</th>)}</tr></thead><tbody>{attributes.map((attribute) => <tr key={attribute.key}><th scope="row">{attribute.label}</th>{entities.map((entity) => <td key={entity.key}><span className="generic-no-observation">Not verified</span></td>)}</tr>)}</tbody></table></div>
       </section>}
-      {session.clarification.ready_for_execution && !session.comparison_id && <p className="workflow-note">The backend marked this intent ready; execution will use the existing comparison service.</p>}
-    </div>}
+      {needsSource ? <div className="plain-clarification"><h2>Verified comparison data isn’t available yet</h2><p>We couldn’t verify product details for this comparison. Shopping links aren’t available yet either.</p></div> : awaitingConfirmation ? <div className="plain-clarification"><h2>Check your comparison</h2><p>Here’s what we’ll compare. If anything is wrong, edit the form above and submit again.</p><div className="comparison-understood"><p><strong>Products</strong><span>{entities.map((entity) => entity.display_name).join(" and ") || products.join(" and ")}</span></p><p><strong>Comparing</strong><span>{attributes.map((attribute) => attribute.label).join(", ") || selected.join(", ")}</span></p></div><label className="plain-confirm"><input type="checkbox" checked={reviewed} onChange={(event) => setReviewed(event.target.checked)} disabled={loading || busy} /> This matches what I want to compare</label><button type="button" className="generic-submit" onClick={confirmInterpretation} disabled={!reviewed || loading || busy}>{loading ? "Continuing..." : "Continue"}</button></div> : questions.length > 0 ? <div className="plain-clarification"><h2>One quick question</h2><ul>{questions.map((issue, index) => <li key={index}>{friendlyQuestion(issue, products)}{safeCandidates(issue).length > 0 && <div className="clarification-candidates">{safeCandidates(issue).map((candidate) => <button type="button" key={candidate} onClick={() => setClarificationAnswer(candidate)}>{candidate}</button>)}</div>}</li>)}</ul><form onSubmit={continueClarification}><label htmlFor="comparison-clarification-answer">Your answer</label><input id="comparison-clarification-answer" value={clarificationAnswer} onChange={(event) => setClarificationAnswer(event.target.value)} placeholder="Add a short detail" disabled={loading || busy} /><button type="submit" className="generic-submit" disabled={!clarificationAnswer.trim() || loading || busy}>{loading ? "Updating..." : "Continue"}</button></form></div> : null}
+    </section>}
   </section>;
 }

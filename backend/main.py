@@ -1,5 +1,6 @@
 """FastAPI entry point for persistent market research runs."""
 import json
+import os
 import threading
 import uuid
 from typing import Any
@@ -17,24 +18,43 @@ from models.price_comparison import (
     RetailerResult,
 )
 from services.price_comparison import start_price_comparison, execute_price_comparison
-from models.comparison import ComparisonRequest
+from models.comparison import AttributeDefinition, ComparisonRequest, EntityReference
 from services.comparison_service import execute_comparison, start_generic_comparison
 from models.comparison import SourceReference
 from models.comparison_intent import ComparisonIntent
 from services.comparison_interpreter import ComparisonInterpretationProvider
 from services.comparison_workflow import (
     ConfirmationPayload,
+    build_structured_comparison_intent,
     confirm_comparison_intent,
     execute_confirmed_comparison,
     get_clarification_details,
     interpret_comparison_workflow,
 )
-from tools.comparison_sources import ComparisonSourceAdapter, RelianceDigitalComparisonAdapter
+from tools.comparison_sources import (
+    WEB_RESEARCH_SOURCE,
+    ComparisonSourceAdapter,
+    RelianceDigitalComparisonAdapter,
+    WebResearchComparisonAdapter,
+)
 
 store.init_db()
 app = FastAPI(title="MarketScoutAI API", description="Evidence-backed autonomous market research", version="1.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"], allow_methods=["*"], allow_headers=["*"])
+allowed_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "FRONTEND_URLS",
+        "http://localhost:3000,http://127.0.0.1:3000",
+    ).split(",")
+    if origin.strip()
+]
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class ResearchRequest(BaseModel):
     question: str = Field(min_length=8, max_length=2000)
@@ -44,6 +64,8 @@ class ComparisonWorkflowRequest(BaseModel):
     user_request: str = Field(min_length=1, max_length=4000)
     context: dict[str, Any] | None = None
     source_preferences: list[dict[str, Any]] = Field(default_factory=list)
+    entities: list[dict[str, Any]] | None = None
+    attributes: list[dict[str, Any]] | None = None
 
 
 class ComparisonWorkflowConfirmation(BaseModel):
@@ -60,7 +82,7 @@ def _run_price_comparison(comparison_id: str):
 
 def _generic_comparison_adapters() -> tuple[ComparisonSourceAdapter, ...]:
     """Registry of source adapters enabled for generic comparisons."""
-    return (RelianceDigitalComparisonAdapter(),)
+    return (WebResearchComparisonAdapter(), RelianceDigitalComparisonAdapter())
 
 
 # Workflow drafts are deliberately separate from persisted comparison runs.
@@ -165,13 +187,25 @@ def get_comparison_workflow_sources():
 def start_comparison_workflow(payload: ComparisonWorkflowRequest, background_tasks: BackgroundTasks):
     try:
         sources = [SourceReference(**item) for item in payload.source_preferences]
-        intent = interpret_comparison_workflow(
-            payload.user_request,
-            context=payload.context,
-            source_preferences=sources or None,
-            allowed_sources=tuple(adapter.source for adapter in _generic_comparison_adapters()),
-            provider=_comparison_interpretation_provider(),
-        )
+        if (payload.entities is None) != (payload.attributes is None):
+            raise ValueError("entities and attributes must be supplied together")
+        if payload.entities is not None:
+            request = ComparisonRequest(
+                user_request=payload.user_request,
+                entities=[EntityReference(**item) for item in payload.entities],
+                attributes=[AttributeDefinition(**item) for item in payload.attributes or []],
+                context=payload.context,
+                source_preferences=sources,
+            )
+            intent = build_structured_comparison_intent(request, default_source=WEB_RESEARCH_SOURCE)
+        else:
+            intent = interpret_comparison_workflow(
+                payload.user_request,
+                context=payload.context,
+                source_preferences=sources or None,
+                allowed_sources=tuple(adapter.source for adapter in _generic_comparison_adapters()),
+                provider=_comparison_interpretation_provider(),
+            )
     except (TypeError, ValueError) as exc:
         raise HTTPException(422, str(exc)) from exc
     workflow_id = str(uuid.uuid4())

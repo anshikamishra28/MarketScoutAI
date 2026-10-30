@@ -1,25 +1,19 @@
 import type { ResearchSource } from "../types/research";
 
-interface Props { sources: ResearchSource[] }
+interface Props { sources?: ResearchSource[] | null }
 
-export function SourcesList({ sources }: Props) {
-  return <article className="panel sources-panel">
-    <div className="panel-title"><h3>Sources</h3><span>{sources.length} discovered</span></div>
-    {!sources.length ? <div className="empty-state"><strong>No sources returned</strong><span>Discovered and evaluated source pages will appear here.</span></div> : <div className="source-list">
-      {sources.map((source) => <article className="source-card" key={source.id}>
-        <div className="source-card-heading"><div><h4>{source.title || source.url}</h4><span>{source.publisher || domainOf(source.url)} · {source.source_type || source.evaluation?.source_type || "Type unavailable"}</span></div>
-          <span className={`usable-badge ${source.evaluation?.usable ? "usable" : "not-usable"}`}>{source.evaluation?.usable === undefined ? "Not evaluated" : source.evaluation.usable ? "Usable" : "Not usable"}</span>
-        </div>
-        {source.evaluation?.reason && <p className="source-reason">{source.evaluation.reason}</p>}
-        {source.fetch_error && <p className="source-error">Fetch issue: {source.fetch_error}</p>}
-        <div className="source-meta"><span>Confidence {score(source.evaluation?.confidence)}</span><span>Relevance {score(source.evaluation?.relevance)}</span><span>{source.published_at || "Publication date unavailable"}</span></div>
-        {source.url && <a className="source-link" href={source.url} target="_blank" rel="noopener noreferrer">Open source ↗</a>}
-      </article>)}
-    </div>}
-  </article>;
+function domainOf(url: string): string {
+  try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return "Source"; }
 }
 
-function score(value: number | undefined): string { return typeof value === "number" ? `${Math.round(value * 100)}%` : "—"; }
-function domainOf(url: string): string {
-  try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return "Publisher unavailable"; }
+export function SourcesList({ sources: suppliedSources }: Props) {
+  const sources = suppliedSources ?? [];
+  const unique = Array.from(new Map(sources.filter((source) => source.url).map((source) => [source.url, source])).values());
+  return <details className="panel disclosure-panel sources-panel concise-secondary">
+    <summary className="disclosure-summary"><h3>Sources</h3><span>{unique.length} source{unique.length === 1 ? "" : "s"} used · View sources</span></summary>
+    {!unique.length ? <p className="empty-note">No sources were returned.</p> : <div className="source-table-scroll"><table className="source-table">
+      <thead><tr><th>Source</th><th>Relevance</th><th>Link</th></tr></thead>
+      <tbody>{unique.map((source) => <tr key={source.url}><th scope="row"><strong>{source.title?.trim() || source.publisher?.trim() || domainOf(source.url)}</strong><small>{source.publisher || domainOf(source.url)}</small></th><td>{typeof source.evaluation?.relevance === "number" ? `${Math.round(source.evaluation.relevance * 100)}%` : "Not provided"}</td><td><a href={source.url} target="_blank" rel="noopener noreferrer">View source</a></td></tr>)}</tbody>
+    </table></div>}
+  </details>;
 }

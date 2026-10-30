@@ -28,6 +28,43 @@ _CONFIRMATION_ISSUE_CODES = {
 }
 
 
+def build_structured_comparison_intent(
+    request: ComparisonRequest,
+    *,
+    default_source: SourceReference,
+) -> ComparisonIntent:
+    """Build an intent from values explicitly entered in the generic form.
+
+    A missing source gets the built-in web source, recorded as system-provided.
+    Name-only discovery is allowed only when a category was explicitly given.
+    Explicit source preferences are never supplemented or replaced.
+    """
+    if not isinstance(request, ComparisonRequest):
+        raise ValueError("request must be a ComparisonRequest")
+    system_source = not request.source_preferences
+    if system_source:
+        request = ComparisonRequest(
+            user_request=request.user_request,
+            entities=request.entities,
+            attributes=request.attributes,
+            context=request.context,
+            source_preferences=[default_source],
+        )
+    allow_name_only = (
+        isinstance(request.context, dict)
+        and isinstance(request.context.get("category"), str)
+        and bool(request.context["category"].strip())
+        and any(source.key == default_source.key for source in request.source_preferences)
+    )
+    base = build_comparison_intent(request, allow_display_name_identity=allow_name_only)
+    provenance = dict(base.provenance)
+    if system_source:
+        for field in ("key", "name", "source_type", "url"):
+            if getattr(default_source, field) is not None:
+                provenance[f"sources.{default_source.key}.{field}"] = Provenance.SYSTEM_PROVIDED
+    return ComparisonIntent(request, base.state, base.unresolved, provenance)
+
+
 @dataclass
 class ConfirmationPayload:
     """Explicit field confirmations keyed by JSON Pointer paths."""

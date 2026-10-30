@@ -56,7 +56,11 @@ def _user_provenance(request: ComparisonRequest) -> dict[str, Provenance]:
     return paths
 
 
-def build_comparison_intent(request: ComparisonRequest) -> ComparisonIntent:
+def build_comparison_intent(
+    request: ComparisonRequest,
+    *,
+    allow_display_name_identity: bool = False,
+) -> ComparisonIntent:
     """Represent whether an explicit request is ready for source execution.
 
     This function only validates and wraps supplied data. It performs no
@@ -73,8 +77,14 @@ def build_comparison_intent(request: ComparisonRequest) -> ComparisonIntent:
             message="At least two explicitly named entities are required for a comparison.",
             clarification_question="Which entities would you like to compare? Please provide at least two.",
         ))
+    category_context = request.context.get("category") if isinstance(request.context, dict) else None
+    name_identity_allowed = (
+        allow_display_name_identity
+        and isinstance(category_context, str)
+        and bool(category_context.strip())
+    )
     for entity in request.entities:
-        if not _has_explicit_identity(entity):
+        if not _has_explicit_identity(entity) and not name_identity_allowed:
             issues.append(InterpretationIssue(
                 code="ENTITY_IDENTITY_UNRESOLVED",
                 target="identifier",

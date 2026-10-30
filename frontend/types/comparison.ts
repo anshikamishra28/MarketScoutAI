@@ -144,7 +144,7 @@ export interface ComparisonWorkflowIntent {
   request: ComparisonRequest;
   state: "ready" | "needs_clarification";
   unresolved: ComparisonWorkflowIssue[];
-  provenance: Record<string, "user_provided" | "proposed" | "user_confirmed">;
+  provenance: Record<string, "user_provided" | "proposed" | "user_confirmed" | "system_provided">;
 }
 
 export interface ComparisonWorkflowResponse {
@@ -164,6 +164,8 @@ export interface ComparisonWorkflowRequest {
   user_request: string;
   context?: Record<string, JsonValue> | null;
   source_preferences: SourceReference[];
+  entities?: EntityReference[];
+  attributes?: AttributeDefinition[];
 }
 
 export interface ComparisonWorkflowConfirmation {

@@ -12,35 +12,42 @@ Submit a market question and follow a bounded research run. The system plans sea
 
 ### Generic Comparison
 
-Submit a free-form comparison request together with entities, optional generic identifiers, attributes, and source preferences. The comparison service checks registered source adapters, stores source checks and observations separately from research evidence, then produces deterministic analysis from the stored observations.
+Submit a free-form comparison request or use structured inputs with entities, optional generic identifiers, attributes, and source preferences. Natural-language requests are interpreted into draft intents with interactive clarification and explicit confirmation. The comparison service checks registered source adapters, stores source checks and observations separately from research evidence, then produces deterministic analysis from the stored observations.
 
-The comparison domain model does not require product-specific fields. An adapter may require its own explicit identifiers; the currently registered Reliance Digital adapter uses product identifiers. The comparison service does not infer identifiers from an entity's display name.
+The comparison domain model does not require product-specific fields:
+- **`web_research` (Default generic source)**: Discovers public pages via search, fetches readable page content, and anchors observations directly to verbatim text for category-scoped entities.
+- **`reliance_digital` (Source-specific retailer adapter)**: Bridges retailer-specific product fetching, requiring explicit identifiers (`brand`, `model`, `storage`) to construct product identity.
 
 ## Architecture
 
-The research and comparison workflows share the application shell and SQLite store, but have separate services, records, and result types.
+The research and comparison workflows share the application shell and SQLite store, but maintain separate services, records, and result types.
 
 ```mermaid
 flowchart TD
-    UI[Next.js application]
-    API[FastAPI]
-    DB[(SQLite)]
+    UI[Next.js Application]
+    API[FastAPI Backend]
+    DB[(SQLite Database)]
     UI --> API
-    API --> R[Market Research]
-    API --> C[Generic Comparison]
-    R --> RP[Research planner]
-    RP --> G[Gemini planner, optional]
-    R --> S[Search providers]
-    S --> F[HTTP fetch and article extraction]
-    F --> E[Evidence extraction and evaluation]
-    E --> L[Research state and coverage loop]
-    L --> A[Market analysis and report assembly]
+    API --> R[Market Research Engine]
+    API --> C[Generic Comparison Engine]
+    R --> RP[Research Planner]
+    RP --> G[Gemini Planner, optional]
+    R --> S[Search Providers: SearXNG / Bing / Google]
+    S --> F[HTTP Fetch & Article Extraction]
+    F --> E[Evidence Extraction & Quality Evaluation]
+    E --> L[State & Coverage Loop, max 3 iter / 15 URLs]
+    L --> A[Market Analysis & Final Report]
     A --> DB
-    C --> V[Validate supplied entities and attributes]
-    V --> REG[Comparison source adapter registry]
-    REG --> RD[Reliance Digital adapter]
-    RD --> OBS[Traceable observations and source checks]
-    OBS --> CA[Deterministic comparison analysis]
+    C --> INT[Comparison Intent Interpreter]
+    INT --> CLAR[Clarification & Confirmation Workflow]
+    CLAR --> V[Validate Entities & Attributes]
+    C --> V
+    V --> REG[Comparison Source Adapter Registry]
+    REG --> WR[Web Research Adapter, default public web]
+    REG --> RD[Reliance Digital Adapter, retailer bridge]
+    WR --> OBS[Traceable Observations & Source Checks]
+    RD --> OBS
+    OBS --> CA[Deterministic Comparison Analysis]
     CA --> DB
 ```
 
@@ -98,14 +105,16 @@ Research data is stored in SQLite tables for runs, sources, evidence, and report
 The generic comparison workflow supports both a natural-language interpretation path and a structured `ComparisonRequest` path. Natural-language input is interpreted on the backend into a draft intent; proposed fields remain unverified until explicitly confirmed. The structured form remains available for callers that already have resolved entities, dynamic attributes, context, and source preferences.
 
 ```text
-Natural-language request
-  → Interpret into a draft intent
-  → Clarify and explicitly confirm proposed fields
+Natural-language request (or structured input)
+  → Interpret into a draft comparison intent
+  → Clarify ambiguities and explicitly confirm proposed fields
   → Execute only when ready
-  → Run each selected registered source adapter
-  → Persist source checks and accepted observations
-  → Analyze the persisted observations deterministically
-  → Return the comparison result
+  → Select registered source adapters (defaulting to web_research)
+  → Run each selected adapter to discover and fetch public pages
+  → Anchor observations strictly to fetched page text
+  → Persist source checks and accepted observations in SQLite
+  → Analyze persisted observations deterministically without network calls
+  → Return complete ComparisonResult with matrix, summary, and unresolved details
 ```
 
 The generic model separates:
@@ -113,13 +122,39 @@ The generic model separates:
 | Concept | Purpose |
 |---|---|
 | Entity | A request-local named entity, with optional generic identifiers and aliases |
-| Attribute | A requested comparison dimension, such as a scalar, range, category, boolean, or structured value |
+| Attribute | A requested comparison dimension (`scalar`, `range`, `categorical`, `boolean`, `structured`) |
 | Source reference | The identity of a source selected for checking |
 | Source check | The result and diagnostics for checking one source |
-| Observation | A value tied to an entity, attribute, and source |
+| Observation | A verified value tied to an entity, attribute, and source, backed by source URL and verbatim quote |
 | Analysis | A deterministic summary derived from persisted observations |
 
 Observations preserve both `raw_value` and `normalized_value`, along with units/currency, observation time, source URL, and optional context. Raw observations are not research `Evidence` records. Missing or conflicting values are represented as unresolved; the system does not invent values when a source fails or cannot establish an exact match.
+
+### Natural-language interpretation and clarification
+
+Callers can supply natural-language queries (e.g., `"Compare Kit Kat and Dairy Milk chocolate on price and quality"`). The backend comparison interpreter analyzes the input:
+- **Field Provenance**: Tracks field origin as `user_provided`, `proposed`, `user_confirmed`, or `system_provided`.
+- **Clarification Issues**: Identifies unresolved entity identities, missing categories, unverified attributes, or ambiguous sources.
+- **Interactive Confirmation**: A clarification workflow allows users to review, edit, and confirm proposed values before any execution starts.
+- **Category-Scoped Display-Name Entities**: When an explicit category context is supplied (e.g., `chocolate` or `laptop`), the system permits display-name-only entities for public web discovery without requiring manufacturer SKUs or proprietary identifiers.
+
+### Registered comparison source adapters
+
+The system registers two independent comparison adapters behind a unified `ComparisonSourceAdapter` interface:
+
+1. **`web_research` (Default Generic Source Adapter)**:
+   - Built-in, domain-independent public web source adapter enabled by default when no specific source is requested.
+   - Discovers candidate page URLs via public search engines (SearXNG, Bing, Google, Wikipedia).
+   - Fetches full HTML pages and extracts readable article text.
+   - Strictly anchors observation values to readable page text containing the entity's display name or known aliases.
+   - Search snippets are never accepted as observations (`search_snippets_used_as_observations: false`).
+   - Extracts numeric prices with currency detection, availability states (`in stock`, `out of stock`), specifications, and textual qualities.
+   - Handles network restrictions gracefully: blocked pages (HTTP 401, 403, 429, captchas) are recorded as `fetch_status: "blocked"` with diagnostic detail; source checks are marked `BLOCKED` or `PARTIAL` rather than failing the run or inventing fallback values.
+
+2. **`reliance_digital` (Source-Specific Retailer Adapter)**:
+   - Source-specific bridge around the retailer fetcher.
+   - Requires explicit entity identifiers sufficient to construct product identity (`brand`, `model`, `ram`, `storage`, `variant`).
+   - Uses the retailer's public product sitemap and search discovery, enforcing exact identity matching on fetched product pages before an offer becomes an observation.
 
 ### Comparison statuses
 
@@ -132,19 +167,13 @@ Comparison lifecycle status and source-check status describe different things:
 
 `partial` means at least one requested entity yielded accepted observations while another entity could not be fully checked. Per-entity diagnostics remain available. A completed comparison can still contain unresolved attributes or failed/unsupported source checks.
 
-### Current comparison source
-
-Reliance Digital is the first registered generic comparison adapter. It is a source-specific bridge around the existing retailer fetcher; discovery and retailer parsing remain inside that adapter/fetcher rather than the generic comparison service. The bridge requires explicit entity identifiers sufficient to construct the retailer's product identity and does not derive those identifiers from `display_name`.
-
-The underlying public-page fetcher uses the retailer's public product sitemap and targeted web-search fallback to discover candidate URLs. Candidate URL text is not treated as identity proof: product pages are fetched and must pass exact identity matching before an offer can become an observation. The adapter preserves matching/discovery diagnostics and maps accepted price and, when requested and available from a matched offer, storage into generic observations. Source URLs and timestamps remain attached. Unavailable, blocked, failed, unsupported, ambiguous, and not-found outcomes do not receive fabricated observations; not-found details are available through diagnostics.
-
-Other public, official, retailer, or provider adapters can be added behind the generic source-adapter contract. They are not implemented merely because the generic models can represent them.
-
 ### Deterministic comparison analysis
 
-`services/comparison_analysis.py` analyzes the persisted comparison result without network access or Gemini calls. It reports each entity's observed values and preserves source metadata. Missing observations and conflicting scalar observations remain unresolved; no value is selected to conceal a conflict.
-
-Ranking is limited to complete, safely comparable scalar numeric values when the request supplies a supported `lower_is_better` or `higher_is_better` comparison rule. At least two entities must have usable values. Without a rule, values are shown without a ranking. Tied best values do not produce a single winner. The frontend displays the analysis returned by the backend and does not calculate rankings or winners.
+`services/comparison_analysis.py` analyzes the persisted comparison result without network access or Gemini calls. It reports each entity's observed values and preserves source metadata:
+- Missing observations and conflicting scalar observations remain unresolved; no value is selected to conceal a conflict.
+- The UI renders missing values as `Not verified`.
+- Shopping links ("Where to Buy") are only presented when supported by verified retailer observations (`source_type: "retailer"`); shopping links are never substituted for core comparison analysis.
+- Ranking is limited to complete, safely comparable scalar numeric values when the request supplies a supported `lower_is_better` or `higher_is_better` comparison rule.
 
 ### Generic comparison persistence
 
@@ -161,6 +190,15 @@ Start the API at `http://localhost:8000`. FastAPI's interactive API documentatio
 | `GET` | `/` | Basic API-running response and link to API docs |
 | `GET` | `/health` | Health status |
 
+### Comparison workflow endpoints
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `POST` | `/comparison-workflows` | Starts a comparison workflow from natural language or structured input; returns workflow ID, intent, clarification state, and queued comparison ID if ready |
+| `GET` | `/comparison-workflows/{workflow_id}` | Returns workflow session status, clarification questions, and linked execution status |
+| `POST` | `/comparison-workflows/{workflow_id}/confirm` | Submits explicit confirmations for proposed intent fields and queues execution |
+| `GET` | `/comparison-workflows/sources` | Returns the list of registered comparison source adapters |
+
 ### Research endpoints
 
 | Method | Endpoint | Purpose |
@@ -175,7 +213,7 @@ Start the API at `http://localhost:8000`. FastAPI's interactive API documentatio
 
 | Method | Endpoint | Purpose |
 |---|---|---|
-| `POST` | `/comparisons` | Accepts a generic comparison request, persists it, schedules background execution, and returns HTTP 202 with a comparison ID and status URL |
+| `POST` | `/comparisons` | Accepts a direct generic comparison request, persists it, schedules background execution, and returns HTTP 202 with a comparison ID and status URL |
 | `GET` | `/comparisons/{comparison_id}/status` | Returns comparison lifecycle status, timestamps, and errors |
 | `GET` | `/comparisons/{comparison_id}` | Returns the complete result: request, entities, attributes, source checks, observations, analysis, unresolved information, errors, and timestamps |
 
@@ -294,16 +332,16 @@ The deterministic automated backend suite is under `tests/` and can be run offli
 cd C:\Projects\MarketScoutAI
 .venv\Scripts\Activate.ps1
 python -m unittest discover -s tests -p "test_*.py" -v
-python -m compileall agents backend database models services tools
+python -m compileall backend models services tools tests
+pip check
 ```
 
-Root-level `test_*.py` files are legacy smoke scripts; some call external services and are not the offline suite above.
+The test suite contains **272 automated tests** covering research lifecycle and evidence evaluation, comparison intent interpretation and clarification, structured workflows, generic web research and Reliance Digital adapters, deterministic analysis, and SQLite persistence.
 
 Frontend checks:
 
 ```powershell
 cd C:\Projects\MarketScoutAI\frontend
-npx.cmd tsc --noEmit
 npm.cmd run build
 ```
 
@@ -313,32 +351,46 @@ Before reviewing a change, run:
 git diff --check
 ```
 
-The repository does not currently define a CI workflow. The project has been validated with deterministic backend tests, frontend TypeScript and production-build checks, and a manual end-to-end comparison through the public Reliance Digital adapter. Live web access is environment- and source-dependent, so live runs are not part of the deterministic unit test suite.
+The repository does not currently define a CI workflow. The project has been validated with deterministic backend unit tests (272/272 passing), clean Python compilation (`compileall`), clean dependency checks (`pip check`), frontend TypeScript and Next.js production builds (`npm run build`), and live end-to-end API workflows across multiple product categories.
 
-## Validated comparison example
+## Validated comparison examples
 
-A real end-to-end comparison was validated for an explicitly identified **OnePlus Nord 6 Fresh Mint**, with 8 GB RAM and 256 GB storage. The Reliance Digital adapter returned accepted price and storage observations with source URL, observation time, and discovery/matching diagnostics. A separate Nord 4 lookup did not find an exact product through available public discovery and returned no fabricated offer; unavailable values remained unresolved. These examples validate one adapter path and do not limit the generic comparison model to phones or electronics.
+1. **Chocolate Comparison (`chocolate`)**:
+   - Compared **Kit Kat** and **Dairy Milk** across *Price*, *Quality*, *Availability*, and *Specifications* using the generic `web_research` source adapter.
+   - Public search discovered articles across culinary, trade, and news outlets. Fetched page text was parsed and quotes were anchored strictly to page text (e.g., Afaqs, Best Media Info, Tasting Table).
+   - Blocked pages (e.g., Bloomberg HTTP 403 Forbidden) were recorded as `fetch_status: "blocked"`, and unsupported attributes remained explicitly `Not verified` in the matrix without any fabricated evidence.
+
+2. **Laptop Comparison (`laptop`)**:
+   - Compared **MacBook Air M4** and **Dell XPS 13** across *Price*, *Quality*, *Availability*, and *Specifications* using the exact same generic domain-independent implementation without product-specific code.
+   - Live web research extracted verified price, availability, and hardware specifications anchored to fetched CNET, Moneycontrol, and Times of India articles, with unverified qualities retained as unresolved.
+
+3. **Autonomous Research Run**:
+   - Executed live market research for *"What are the key market trends for electric two-wheelers in India in 2025?"*.
+   - Evaluated candidate leads, extracted verbatim claims, checked information requirement coverage, and generated a structured final report.
+
+4. **Reliance Digital Retailer Adapter**:
+   - Validated for an explicitly identified **OnePlus Nord CE 3 Lite** and **Redmi Note 13** with explicit brand, model, and storage identifiers. The adapter enforces strict identity verification on fetched retailer pages.
 
 ## Limitations
 
-- Public search providers and retailer pages can change, rate-limit requests, block automated access, or require client-side JavaScript. Paywalls and access controls may prevent collection.
-- Search-provider and source coverage depend on the public endpoints and adapters currently available. Reliance Digital is the only registered generic comparison adapter at present.
-- The legacy price comparison remains product/retailer-specific; it is not the generic comparison contract.
-- Comparisons run using FastAPI background tasks in the API process. There is no durable task queue or distributed worker, so this is not a production job-processing setup.
-- The API currently has no authentication or user/account management. No production deployment configuration is included.
-- Research source quality, relevance, coverage, and conflict decisions use heuristics. Results should be reviewed against the linked sources, and missing requirements may remain unresolved.
-- A generic comparison cannot produce a verified observation if a selected source is unsupported, unavailable, blocked, fails, or does not provide an accepted matching value.
+- Public search providers and external publisher pages can change, rate-limit requests, block automated access (HTTP 401/403/429), or require client-side JavaScript. When anti-bot or paywalls block page fetching, the system records `fetch_status: "blocked"` and retains values as `Not verified` rather than inventing data.
+- Registered generic comparison adapters currently include `web_research` (free public web adapter) and `reliance_digital` (source-specific retailer adapter). Other sources can be added behind the `ComparisonSourceAdapter` interface.
+- Reliance Digital requires structured brand/model identifiers; it does not infer product identity from raw display names.
+- The legacy price comparison remains product/retailer-specific; it is kept for backwards compatibility and is separate from the generic comparison engine.
+- Comparisons and research runs execute using FastAPI background tasks in the API process. There is no durable task queue (e.g., Celery/Redis) or distributed worker.
+- The API currently has no authentication or multi-tenant user isolation.
+- Research source quality, relevance, coverage, and conflict decisions use rule-based heuristics. Missing requirements remain explicitly unresolved.
+- Automated testing uses Python's standard `unittest` module; `pytest` is not included in dependencies.
 
 ## Roadmap
 
 Future work, not current functionality:
 
-- Add generic source adapters for additional public sources, with offline fixtures and traceable observations.
-- Expand deterministic integration tests across source and failure states.
-- Add durable background job execution and deployment configuration if the application moves beyond local/demo use.
-- Consider authentication, user isolation, and operational observability before exposing a hosted service.
-- Improve demo documentation and repeatable portfolio/viva walkthroughs.
+- Add generic source adapters for additional public and structured data sources with offline test fixtures.
+- Add durable background job execution (e.g., Celery or Temporal) and deployment configuration if moving beyond local/demo use.
+- Add authentication, API tokens, and user workspace isolation.
+- Expand export capabilities (CSV, PDF, JSON-LD) for generated research reports and comparison tables.
 
 ## Portfolio description
 
-MarketScoutAI is a web research and comparison application built with FastAPI, Python, SQLite, and React/Next.js. Its research workflow plans bounded multi-query searches, fetches public pages, evaluates verbatim evidence, tracks unresolved requirements, and assembles a source-linked report. A separate domain-independent comparison workflow runs source adapters, stores raw and normalized observations with traceability, and analyzes complete numeric values deterministically when an explicit comparison rule is supplied. The project includes adapter boundaries, persistence and API tests, and frontend TypeScript/build validation.
+MarketScoutAI is an autonomous web research and market intelligence application built with FastAPI, Python, SQLite, and React/Next.js. Its research engine executes bounded multi-query search and observation loops, evaluates verbatim article-level evidence with heuristic relevance and quality gates, tracks requirement coverage, and compiles source-linked reports. A parallel domain-independent comparison engine provides natural-language intent interpretation with interactive clarification and structured forms, executes registered source adapters (including a generic public web research adapter and a Reliance Digital retailer bridge), anchors all observations to fetched page text, and performs deterministic, network-free comparative analysis. The system strictly adheres to factual evidence, displaying missing observations as `Not verified` and presenting shopping links only when backed by verified retailer data.
